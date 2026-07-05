@@ -178,7 +178,9 @@ const commands = [
     .addStringOption(o => o.setName('가위값').setDescription('예: 6000000 / 없으면 0').setRequired(true))
     .addStringOption(o => o.setName('공대원구매금액').setDescription('예: 100000000 / 없으면 0').setRequired(true))
     .addNumberOption(o => o.setName('공대원할인율').setDescription('예: 10 / 없으면 0').setRequired(true))
-    .addIntegerOption(o => o.setName('인원수').setDescription('분배 인원').setRequired(true)),
+    .addIntegerOption(o => o.setName('인원수').setDescription('분배 인원').setRequired(true))
+    .addNumberOption(o => o.setName('뿌리기최저가').setDescription('뿌리기 아이템 경매장 최저가 / 없으면 0').setRequired(false))
+    .addIntegerOption(o => o.setName('뿌리기사용갯수').setDescription('뿌리기 사용 갯수 / 없으면 0').setRequired(false)),
 
   new SlashCommandBuilder()
     .setName('상시공지설정')
@@ -316,13 +318,17 @@ const msg = await interaction.channel.send({ embeds: [embed] });
         const buyerAmounts = parseMoneyList(interaction.options.getString('공대원구매금액'));
         const discount = interaction.options.getNumber('공대원할인율');
         const people = interaction.options.getInteger('인원수');
+        const scatterPrice = interaction.options.getNumber('뿌리기최저가') || 0;
+        const scatterCount = interaction.options.getInteger('뿌리기사용갯수') || 0;
 
         const auctionTotal = auctionAmounts.reduce((a, b) => a + b, 0);
         const scissorTotal = scissorAmounts.reduce((a, b) => a + b, 0);
         const buyerRawTotal = buyerAmounts.reduce((a, b) => a + b, 0);
         const buyerFinalTotal = Math.floor(buyerRawTotal * (100 - discount) / 100);
+        const scatterTotal = Math.floor(scatterPrice * scatterCount);
 
-        const totalPool = auctionTotal - scissorTotal + buyerFinalTotal;
+        const totalPoolBeforeScatter = auctionTotal - scissorTotal + buyerFinalTotal;
+        const totalPool = totalPoolBeforeScatter - scatterTotal;
         const perPersonShare = Math.floor(totalPool / people);
         const sendCount = people - 1;
         const parcelFeePerSend = getParcelFee(perPersonShare);
@@ -332,14 +338,19 @@ const msg = await interaction.channel.send({ embeds: [embed] });
           ? Math.floor((totalSendBudget - totalParcelFee) / sendCount)
           : 0;
 
+        const scatterLine = scatterCount > 0
+          ? `뿌리기 비용 차감: -${formatMesos(scatterTotal)} 메소 (최저가 ${formatMesos(scatterPrice)} × ${scatterCount}개)\n`
+          : '';
+
         await interaction.reply(
           `💰 공대 분배 정산 결과\n\n` +
           `경매장 수령금액 합계: ${formatMesos(auctionTotal)} 메소\n` +
           `가위값 차감: -${formatMesos(scissorTotal)} 메소\n` +
           `공대원 구매금액: ${formatMesos(buyerRawTotal)} 메소\n` +
           `공대원 할인율: ${discount}%\n` +
-          `할인 적용 구매금액: ${formatMesos(buyerFinalTotal)} 메소\n\n` +
-          `총 정산금: ${formatMesos(totalPool)} 메소\n` +
+          `할인 적용 구매금액: ${formatMesos(buyerFinalTotal)} 메소\n` +
+          scatterLine +
+          `\n총 정산금: ${formatMesos(totalPool)} 메소\n` +
           `분배 인원: ${people}명\n\n` +
           `1인당 분배금: ${formatMesos(perPersonShare)} 메소\n` +
           `택배 발송 대상: ${sendCount}명\n` +
