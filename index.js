@@ -16,7 +16,8 @@ const NOTICE_REFRESH_COUNT = 5;
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.GuildMembers
   ]
 });
 
@@ -162,6 +163,28 @@ const newMsg = await channel.send({ embeds: [embed] });
   saveData(data);
 }
 
+function parseMessageLink(link) {
+  const match = link.match(/channels\/(\d+)\/(\d+)\/(\d+)/);
+  if (!match) return null;
+  return { guildId: match[1], channelId: match[2], messageId: match[3] };
+}
+
+async function getAllPollVoters(message) {
+  const voterIds = new Set();
+  if (!message.poll) return voterIds;
+  for (const answer of message.poll.answers.values()) {
+    let after;
+    while (true) {
+      const voters = await answer.fetchVoters({ limit: 100, after });
+      if (voters.size === 0) break;
+      voters.forEach(u => voterIds.add(u.id));
+      if (voters.size < 100) break;
+      after = voters.last().id;
+    }
+  }
+  return voterIds;
+}
+
 const commands = [
   new SlashCommandBuilder()
     .setName('모집생성')
@@ -193,7 +216,16 @@ const commands = [
 
   new SlashCommandBuilder()
     .setName('상시공지삭제')
-    .setDescription('이 채널의 상시공지를 삭제합니다')
+    .setDescription('이 채널의 상시공지를 삭제합니다'),
+
+  new SlashCommandBuilder()
+    .setName('투표미참여')
+    .setDescription('디스코드 투표(Poll)에 참여하지 않은 서버원 명단을 보여줍니다')
+    .addStringOption(o =>
+      o.setName('메시지링크')
+        .setDescription('투표 메시지 우클릭 → 링크 복사 로 가져온 주소')
+        .setRequired(true)
+    )
 ].map(c => c.toJSON());
 
 client.once('ready', async () => {
@@ -358,6 +390,66 @@ const msg = await interaction.channel.send({ embeds: [embed] });
           `총 택배비: ${formatMesos(totalParcelFee)} 메소\n` +
           `실수령액: ${formatMesos(receivePerMember)} 메소`
         );
+        return;
+      }
+
+      if (interaction.commandName === '투표미참여') {
+        await interaction.deferReply({ ephemeral: true });
+
+        const link = interaction.options.getString('메시지링크');
+        const parsed = parseMessageLink(link);
+        if (!parsed) {
+          await interaction.editReply('메시지 링크 형식이 올바르지 않아. 투표 메시지 우클릭 → 링크 복사로 가져와줘.');
+          return;
+        }
+
+        const channel = await client.channels.fetch(parsed.channelId).catch(() => null);
+        if (!channel) {
+          await interaction.editReply('그 채널을 찾을 수 없어. 봇이 채널을 볼 수 있는지 확인해줘.');
+          return;
+        }
+
+        const pollMessage = await channel.messages.fetch(parsed.messageId).catch(() => null);
+        if (!pollMessage) {
+          await interaction.editReply('그 메시지를 찾을 수 없어.');
+          return;
+        }
+
+        if (!pollMessage.poll) {
+          await interaction.editReply('그 메시지에는 디스코드 투표(Poll)가 없어.');
+          return;
+        }
+
+        const voterIds = await getAllPollVoters(pollMessage);
+
+        const guild = interaction.guild;
+        await guild.members.fetch();
+        const allHumanMembers = guild.members.cache.filter(m => !m.user.bot);
+        const nonVoters = allHumanMembers.filter(m => !voterIds.has(m.id));
+
+        const totalCount = allHumanMembers.size;
+        const votedCount = totalCount - nonVoters.size;
+
+        const listText = nonVoters.size
+          ? nonVoters.map(m => `- ${m.displayName} (${m.user.tag})`).join('\n')
+          : '없음 (전원 투표 완료!)';
+
+        const header =
+          `📊 투표 참여 현황\n` +
+          `전체 인원: ${totalCount}명 / 투표 참여: ${votedCount}명 / 미참여: ${nonVoters.size}명\n\n` +
+          `미투표 인원 목록:\n`;
+
+        const full = header + listText;
+
+        if (full.length > 1900) {
+          const buffer = Buffer.from(full, 'utf-8');
+          await interaction.editReply({
+            content: header + '(인원이 많아 파일로 첨부할게)',
+            files: [{ attachment: buffer, name: '미투표_명단.txt' }]
+          });
+        } else {
+          await interaction.editReply(full);
+        }
         return;
       }
 
