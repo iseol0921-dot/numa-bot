@@ -204,7 +204,8 @@ const commands = [
     .addNumberOption(o => o.setName('공대원할인율').setDescription('예: 10 / 없으면 0').setRequired(true))
     .addIntegerOption(o => o.setName('인원수').setDescription('분배 인원').setRequired(true))
     .addNumberOption(o => o.setName('뿌리기최저가').setDescription('뿌리기 아이템 경매장 최저가 / 없으면 0').setRequired(false))
-    .addIntegerOption(o => o.setName('뿌리기사용갯수').setDescription('뿌리기 사용 갯수 / 없으면 0').setRequired(false)),
+    .addIntegerOption(o => o.setName('뿌리기사용갯수').setDescription('뿌리기 사용 갯수 / 없으면 0').setRequired(false))
+    .addStringOption(o => o.setName('불의눈값').setDescription('자쿰 입장용 불의눈 구매 비용 / 없으면 0').setRequired(false)),
 
   new SlashCommandBuilder()
     .setName('상시공지설정')
@@ -353,14 +354,16 @@ const msg = await interaction.channel.send({ embeds: [embed] });
         const people = interaction.options.getInteger('인원수');
         const scatterPrice = interaction.options.getNumber('뿌리기최저가') || 0;
         const scatterCount = interaction.options.getInteger('뿌리기사용갯수') || 0;
+        const eyeOfFireAmounts = parseMoneyList(interaction.options.getString('불의눈값'));
 
         const auctionTotal = auctionAmounts.reduce((a, b) => a + b, 0);
         const scissorTotal = scissorAmounts.reduce((a, b) => a + b, 0);
         const buyerRawTotal = buyerAmounts.reduce((a, b) => a + b, 0);
         const buyerFinalTotal = Math.floor(buyerRawTotal * (100 - discount) / 100);
         const scatterTotal = Math.floor(scatterPrice * scatterCount);
+        const eyeOfFireTotal = eyeOfFireAmounts.reduce((a, b) => a + b, 0);
 
-        const totalPoolBeforeScatter = auctionTotal - scissorTotal + buyerFinalTotal;
+        const totalPoolBeforeScatter = auctionTotal - scissorTotal + buyerFinalTotal - eyeOfFireTotal;
         const totalPool = totalPoolBeforeScatter - scatterTotal;
         const perPersonShare = Math.floor(totalPool / people);
         const sendCount = people - 1;
@@ -375,6 +378,10 @@ const msg = await interaction.channel.send({ embeds: [embed] });
           ? `뿌리기 비용 차감: -${formatMesos(scatterTotal)} 메소 (최저가 ${formatMesos(scatterPrice)} × ${scatterCount}개)\n`
           : '';
 
+        const eyeOfFireLine = eyeOfFireTotal > 0
+          ? `불의눈 구매 비용 차감: -${formatMesos(eyeOfFireTotal)} 메소\n`
+          : '';
+
         await interaction.reply(
           `💰 공대 분배 정산 결과\n\n` +
           `경매장 수령금액 합계: ${formatMesos(auctionTotal)} 메소\n` +
@@ -382,6 +389,7 @@ const msg = await interaction.channel.send({ embeds: [embed] });
           `공대원 구매금액: ${formatMesos(buyerRawTotal)} 메소\n` +
           `공대원 할인율: ${discount}%\n` +
           `할인 적용 구매금액: ${formatMesos(buyerFinalTotal)} 메소\n` +
+          eyeOfFireLine +
           scatterLine +
           `\n총 정산금: ${formatMesos(totalPool)} 메소\n` +
           `분배 인원: ${people}명\n\n` +
@@ -716,6 +724,10 @@ if (existing && !isAdmin) {
         await interaction.reply({ content: '오류가 발생했어. Railway 로그 확인 필요!', ephemeral: true });
       }
     } catch {}
+  }
+});
+
+client.login(process.env.DISCORD_TOKEN);
   }
 });
 
