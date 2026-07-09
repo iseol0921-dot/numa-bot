@@ -8,6 +8,7 @@ import fs from 'fs';
 const SERVER_IDS = [
   '1519109990101815386',
   '1506990201204117565'
+  '1507442329890455662'
 ];
 
 const DATA_FILE = './data.json';
