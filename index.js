@@ -202,7 +202,9 @@ const commands = [
     .addStringOption(o => o.setName('가위값').setDescription('예: 6000000 / 없으면 0').setRequired(true))
     .addStringOption(o => o.setName('공대원구매금액').setDescription('예: 100000000 / 없으면 0').setRequired(true))
     .addNumberOption(o => o.setName('공대원할인율').setDescription('예: 10 / 없으면 0').setRequired(true))
-    .addIntegerOption(o => o.setName('인원수').setDescription('분배 인원').setRequired(true))
+    .addIntegerOption(o => o.setName('인원수').setDescription('분배 전체 인원 (용병 포함)').setRequired(true))
+    .addIntegerOption(o => o.setName('용병인원수').setDescription('전체 인원 중 용병 인원수 / 없으면 0').setRequired(false))
+    .addNumberOption(o => o.setName('공대장보너스율').setDescription('용병 제외 금액 중 공대장 고생금 비율(%) / 없으면 0').setRequired(false))
     .addNumberOption(o => o.setName('뿌리기최저가').setDescription('뿌리기 아이템 경매장 최저가 / 없으면 0').setRequired(false))
     .addIntegerOption(o => o.setName('뿌리기사용갯수').setDescription('뿌리기 사용 갯수 / 없으면 0').setRequired(false))
     .addStringOption(o => o.setName('불의눈값').setDescription('자쿰 입장용 불의눈 구매 비용 / 없으면 0').setRequired(false)),
@@ -352,9 +354,28 @@ const msg = await interaction.channel.send({ embeds: [embed] });
         const buyerAmounts = parseMoneyList(interaction.options.getString('공대원구매금액'));
         const discount = interaction.options.getNumber('공대원할인율');
         const people = interaction.options.getInteger('인원수');
+        const mercenaryCount = interaction.options.getInteger('용병인원수') || 0;
+        const bonusRate = interaction.options.getNumber('공대장보너스율') || 0;
         const scatterPrice = interaction.options.getNumber('뿌리기최저가') || 0;
         const scatterCount = interaction.options.getInteger('뿌리기사용갯수') || 0;
         const eyeOfFireAmounts = parseMoneyList(interaction.options.getString('불의눈값'));
+
+        if (mercenaryCount < 0 || mercenaryCount > people) {
+          await interaction.reply({
+            content: '용병인원수가 잘못됐어. 0 이상, 인원수 이하로 입력해줘.',
+            ephemeral: true
+          });
+          return;
+        }
+
+        const regularCount = people - mercenaryCount;
+        if (regularCount <= 0) {
+          await interaction.reply({
+            content: '정규 길드원이 0명이야. 공대장 몫을 계산할 수 없어. 용병인원수를 확인해줘.',
+            ephemeral: true
+          });
+          return;
+        }
 
         const auctionTotal = auctionAmounts.reduce((a, b) => a + b, 0);
         const scissorTotal = scissorAmounts.reduce((a, b) => a + b, 0);
@@ -365,14 +386,29 @@ const msg = await interaction.channel.send({ embeds: [embed] });
 
         const totalPoolBeforeScatter = auctionTotal - scissorTotal + buyerFinalTotal - eyeOfFireTotal;
         const totalPool = totalPoolBeforeScatter - scatterTotal;
-        const perPersonShare = Math.floor(totalPool / people);
-        const sendCount = people - 1;
-        const parcelFeePerSend = getParcelFee(perPersonShare);
-        const totalParcelFee = parcelFeePerSend * sendCount;
-        const totalSendBudget = perPersonShare * sendCount;
-        const receivePerMember = sendCount > 0
-          ? Math.floor((totalSendBudget - totalParcelFee) / sendCount)
-          : 0;
+
+        // 1) 전체 인원 기준 1인분 = 용병 몫 (용병은 이 금액에서 택배비만 빠짐)
+        const mercenaryShare = Math.floor(totalPool / people);
+        const mercenaryTotalPaid = mercenaryShare * mercenaryCount;
+
+        // 2) 용병 몫 제외한 나머지에서 공대장 고생금(보너스) 산출
+        const remainingPool = totalPool - mercenaryTotalPaid;
+        const leaderBonus = Math.floor(remainingPool * bonusRate / 100);
+        const afterBonusPool = remainingPool - leaderBonus;
+
+        // 3) 보너스 뗀 나머지를 정규 길드원(공대장 포함) 인원수로 재분배
+        const regularShare = Math.floor(afterBonusPool / regularCount);
+        const otherRegularCount = regularCount - 1; // 공대장 제외 정규길드원
+        const leaderTotal = regularShare + leaderBonus; // 공대장은 자기 몫이라 택배비 없음
+
+        // 택배비: 공대장이 각자에게 보내주는 구조 -> 받는 사람이 각자 부담
+        const mercenaryFeePerSend = mercenaryCount > 0 ? getParcelFee(mercenaryShare) : 0;
+        const mercenaryReceive = mercenaryShare - mercenaryFeePerSend;
+        const mercenaryTotalFee = mercenaryFeePerSend * mercenaryCount;
+
+        const regularFeePerSend = otherRegularCount > 0 ? getParcelFee(regularShare) : 0;
+        const regularReceive = regularShare - regularFeePerSend;
+        const regularTotalFee = regularFeePerSend * otherRegularCount;
 
         const scatterLine = scatterCount > 0
           ? `뿌리기 비용 차감: -${formatMesos(scatterTotal)} 메소 (최저가 ${formatMesos(scatterPrice)} × ${scatterCount}개)\n`
@@ -380,6 +416,17 @@ const msg = await interaction.channel.send({ embeds: [embed] });
 
         const eyeOfFireLine = eyeOfFireTotal > 0
           ? `불의눈 구매 비용 차감: -${formatMesos(eyeOfFireTotal)} 메소\n`
+          : '';
+
+        const mercenaryLine = mercenaryCount > 0
+          ? `\n👤 용병 (${mercenaryCount}명)\n` +
+            `1인 기본 몫: ${formatMesos(mercenaryShare)} 메소\n` +
+            `1회 택배비: ${formatMesos(mercenaryFeePerSend)} 메소\n` +
+            `1인당 실수령액: ${formatMesos(mercenaryReceive)} 메소\n`
+          : '';
+
+        const bonusLine = bonusRate > 0
+          ? `공대장 고생금(${bonusRate}%) 차감: -${formatMesos(leaderBonus)} 메소\n`
           : '';
 
         await interaction.reply(
@@ -392,12 +439,19 @@ const msg = await interaction.channel.send({ embeds: [embed] });
           eyeOfFireLine +
           scatterLine +
           `\n총 정산금: ${formatMesos(totalPool)} 메소\n` +
-          `분배 인원: ${people}명\n\n` +
-          `1인당 분배금: ${formatMesos(perPersonShare)} 메소\n` +
-          `택배 발송 대상: ${sendCount}명\n` +
-          `1회 택배비: ${formatMesos(parcelFeePerSend)} 메소\n` +
-          `총 택배비: ${formatMesos(totalParcelFee)} 메소\n` +
-          `실수령액: ${formatMesos(receivePerMember)} 메소`
+          `전체 인원: ${people}명 (용병 ${mercenaryCount}명 / 정규 ${regularCount}명)\n` +
+          mercenaryLine +
+          `\n용병 몫 제외 금액: ${formatMesos(remainingPool)} 메소\n` +
+          bonusLine +
+          `정규 재분배 금액: ${formatMesos(afterBonusPool)} 메소 ÷ ${regularCount}명\n\n` +
+          `👑 공대장\n` +
+          `기본 몫: ${formatMesos(regularShare)} 메소 + 고생금 ${formatMesos(leaderBonus)} 메소\n` +
+          `실수령액: ${formatMesos(leaderTotal)} 메소 (본인 몫이라 택배비 없음)\n\n` +
+          `👥 정규 길드원 (공대장 제외, ${otherRegularCount}명)\n` +
+          `1인 기본 몫: ${formatMesos(regularShare)} 메소\n` +
+          `1회 택배비: ${formatMesos(regularFeePerSend)} 메소\n` +
+          `1인당 실수령액: ${formatMesos(regularReceive)} 메소\n\n` +
+          `📦 총 택배비: ${formatMesos(mercenaryTotalFee + regularTotalFee)} 메소`
         );
         return;
       }
@@ -724,6 +778,10 @@ if (existing && !isAdmin) {
         await interaction.reply({ content: '오류가 발생했어. Railway 로그 확인 필요!', ephemeral: true });
       }
     } catch {}
+  }
+});
+
+client.login(process.env.DISCORD_TOKEN);
   }
 });
 
