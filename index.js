@@ -782,7 +782,3 @@ if (existing && !isAdmin) {
 });
 
 client.login(process.env.DISCORD_TOKEN);
-  }
-});
-
-client.login(process.env.DISCORD_TOKEN);
