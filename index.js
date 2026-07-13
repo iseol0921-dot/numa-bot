@@ -200,8 +200,6 @@ const commands = [
     .setDescription('공대 분배금 정산 계산')
     .addStringOption(o => o.setName('경매장수령금액').setDescription('예: 135500000,86800000').setRequired(true))
     .addStringOption(o => o.setName('가위값').setDescription('예: 6000000 / 없으면 0').setRequired(true))
-    .addStringOption(o => o.setName('공대원구매금액').setDescription('예: 100000000 / 없으면 0').setRequired(true))
-    .addNumberOption(o => o.setName('공대원할인율').setDescription('예: 10 / 없으면 0').setRequired(true))
     .addIntegerOption(o => o.setName('인원수').setDescription('분배 전체 인원 (용병 포함)').setRequired(true))
     .addIntegerOption(o => o.setName('용병인원수').setDescription('전체 인원 중 용병 인원수 / 없으면 0').setRequired(false))
     .addNumberOption(o => o.setName('공대장보너스율').setDescription('용병 제외 금액 중 공대장 고생금 비율(%) / 없으면 0').setRequired(false))
@@ -351,8 +349,6 @@ const msg = await interaction.channel.send({ embeds: [embed] });
       if (interaction.commandName === '공대분배정산') {
         const auctionAmounts = parseMoneyList(interaction.options.getString('경매장수령금액'));
         const scissorAmounts = parseMoneyList(interaction.options.getString('가위값'));
-        const buyerAmounts = parseMoneyList(interaction.options.getString('공대원구매금액'));
-        const discount = interaction.options.getNumber('공대원할인율');
         const people = interaction.options.getInteger('인원수');
         const mercenaryCount = interaction.options.getInteger('용병인원수') || 0;
         const bonusRate = interaction.options.getNumber('공대장보너스율') || 0;
@@ -379,12 +375,10 @@ const msg = await interaction.channel.send({ embeds: [embed] });
 
         const auctionTotal = auctionAmounts.reduce((a, b) => a + b, 0);
         const scissorTotal = scissorAmounts.reduce((a, b) => a + b, 0);
-        const buyerRawTotal = buyerAmounts.reduce((a, b) => a + b, 0);
-        const buyerFinalTotal = Math.floor(buyerRawTotal * (100 - discount) / 100);
         const scatterTotal = Math.floor(scatterPrice * scatterCount);
         const eyeOfFireTotal = eyeOfFireAmounts.reduce((a, b) => a + b, 0);
 
-        const totalPoolBeforeScatter = auctionTotal - scissorTotal + buyerFinalTotal - eyeOfFireTotal;
+        const totalPoolBeforeScatter = auctionTotal - scissorTotal - eyeOfFireTotal;
         const totalPool = totalPoolBeforeScatter - scatterTotal;
 
         // 1) 전체 인원 기준 1인분 = 용병 몫 (용병은 이 금액에서 택배비만 빠짐)
@@ -433,9 +427,6 @@ const msg = await interaction.channel.send({ embeds: [embed] });
           `💰 공대 분배 정산 결과\n\n` +
           `경매장 수령금액 합계: ${formatMesos(auctionTotal)} 메소\n` +
           `가위값 차감: -${formatMesos(scissorTotal)} 메소\n` +
-          `공대원 구매금액: ${formatMesos(buyerRawTotal)} 메소\n` +
-          `공대원 할인율: ${discount}%\n` +
-          `할인 적용 구매금액: ${formatMesos(buyerFinalTotal)} 메소\n` +
           eyeOfFireLine +
           scatterLine +
           `\n총 정산금: ${formatMesos(totalPool)} 메소\n` +
