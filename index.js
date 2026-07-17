@@ -80,7 +80,7 @@ function formatMesos(num) {
 }
 
 function getParcelFee(amount) {
-  return 10000 + Math.floor(amount * 0.04);
+  return 10000 + Math.floor(amount * 0.08);
 }
 
 function restoreRaidFromMessage(interaction, raidId) {
