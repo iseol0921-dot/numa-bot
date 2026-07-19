@@ -79,8 +79,14 @@ function formatMesos(num) {
   return Math.floor(num).toLocaleString('ko-KR');
 }
 
+// 택배 수수료: 고정 10,000메소 + 금액의 8%
 function getParcelFee(amount) {
   return 10000 + Math.floor(amount * 0.08);
+}
+
+// 직거래(교환) 수수료: 금액의 6% (고정비 없음)
+function getDirectTradeFee(amount) {
+  return Math.floor(amount * 0.06);
 }
 
 function restoreRaidFromMessage(interaction, raidId) {
@@ -395,14 +401,21 @@ const msg = await interaction.channel.send({ embeds: [embed] });
         const otherRegularCount = regularCount - 1; // 공대장 제외 정규길드원
         const leaderTotal = regularShare + leaderBonus; // 공대장은 자기 몫이라 택배비 없음
 
-        // 택배비: 공대장이 각자에게 보내주는 구조 -> 받는 사람이 각자 부담
+        // 택배비: 보내는 사람(공대장)이 부담 -> 받는 사람은 1인 기본 몫을 그대로 수령
         const mercenaryFeePerSend = mercenaryCount > 0 ? getParcelFee(mercenaryShare) : 0;
-        const mercenaryReceive = mercenaryShare - mercenaryFeePerSend;
+        const mercenaryReceive = mercenaryShare;
         const mercenaryTotalFee = mercenaryFeePerSend * mercenaryCount;
 
         const regularFeePerSend = otherRegularCount > 0 ? getParcelFee(regularShare) : 0;
-        const regularReceive = regularShare - regularFeePerSend;
+        const regularReceive = regularShare;
         const regularTotalFee = regularFeePerSend * otherRegularCount;
+
+        // 직거래(교환) 수수료 6% 버전 - 택배 대신 직거래로 줄 경우 수령액
+        const mercenaryDirectFee = mercenaryCount > 0 ? getDirectTradeFee(mercenaryShare) : 0;
+        const mercenaryDirectReceive = mercenaryShare - mercenaryDirectFee;
+
+        const regularDirectFee = otherRegularCount > 0 ? getDirectTradeFee(regularShare) : 0;
+        const regularDirectReceive = regularShare - regularDirectFee;
 
         const scatterLine = scatterCount > 0
           ? `뿌리기 비용 차감: -${formatMesos(scatterTotal)} 메소 (최저가 ${formatMesos(scatterPrice)} × ${scatterCount}개)\n`
@@ -415,8 +428,8 @@ const msg = await interaction.channel.send({ embeds: [embed] });
         const mercenaryLine = mercenaryCount > 0
           ? `\n👤 용병 (${mercenaryCount}명)\n` +
             `1인 기본 몫: ${formatMesos(mercenaryShare)} 메소\n` +
-            `1회 택배비: ${formatMesos(mercenaryFeePerSend)} 메소\n` +
-            `1인당 실수령액: ${formatMesos(mercenaryReceive)} 메소\n`
+            `📦 택배(발송비 분배장 부담): 실수령 ${formatMesos(mercenaryReceive)} 메소 (발송비 ${formatMesos(mercenaryFeePerSend)}/건은 분배장이 별도 부담)\n` +
+            `🤝 직거래(수수료 6% 받는사람 부담): 수수료 ${formatMesos(mercenaryDirectFee)} 제외 실수령 ${formatMesos(mercenaryDirectReceive)} 메소\n`
           : '';
 
         const bonusLine = bonusRate > 0
@@ -440,9 +453,9 @@ const msg = await interaction.channel.send({ embeds: [embed] });
           `실수령액: ${formatMesos(leaderTotal)} 메소 (본인 몫이라 택배비 없음)\n\n` +
           `👥 정규 길드원 (공대장 제외, ${otherRegularCount}명)\n` +
           `1인 기본 몫: ${formatMesos(regularShare)} 메소\n` +
-          `1회 택배비: ${formatMesos(regularFeePerSend)} 메소\n` +
-          `1인당 실수령액: ${formatMesos(regularReceive)} 메소\n\n` +
-          `📦 총 택배비: ${formatMesos(mercenaryTotalFee + regularTotalFee)} 메소`
+          `📦 택배(발송비 분배장 부담): 실수령 ${formatMesos(regularReceive)} 메소 (발송비 ${formatMesos(regularFeePerSend)}/건은 분배장이 별도 부담)\n` +
+          `🤝 직거래(수수료 6% 받는사람 부담): 수수료 ${formatMesos(regularDirectFee)} 제외 실수령 ${formatMesos(regularDirectReceive)} 메소\n\n` +
+          `📦 분배장이 부담할 총 택배 발송비: ${formatMesos(mercenaryTotalFee + regularTotalFee)} 메소`
         );
         return;
       }
