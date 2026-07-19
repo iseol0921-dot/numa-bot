@@ -790,4 +790,6 @@ if (existing && !isAdmin) {
   }
 });
 
-client.login(process.env.DISCORD_TOKEN);
+client.login(process.env.DISCORD_TOKEN).catch(err => {
+  console.error('❌ 디스코드 로그인 실패:', err);
+});
