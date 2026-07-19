@@ -425,7 +425,7 @@ const msg = await interaction.channel.send({ embeds: [embed] });
           ? `불의눈 구매 비용 차감: -${formatMesos(eyeOfFireTotal)} 메소\n`
           : '';
 
-        const mercenaryLine = mercenaryCount > 0
+        const mercenaryLine = mercenaryCount > 0 && bonusRate > 0
           ? `\n👤 용병 (${mercenaryCount}명)\n` +
             `1인 기본 몫: ${formatMesos(mercenaryShare)} 메소\n` +
             `📦 택배(수수료 8%+1만): 수수료 ${formatMesos(mercenaryFeePerSend)} 제외 송금액 ${formatMesos(mercenaryReceive)} 메소\n` +
@@ -453,7 +453,7 @@ const msg = await interaction.channel.send({ embeds: [embed] });
           `\n총 정산금: ${formatMesos(totalPool)} 메소\n` +
           `전체 인원: ${people}명 (용병 ${mercenaryCount}명 / 고정 ${regularCount}명)\n` +
           mercenaryLine +
-          `\n용병 몫 제외 금액: ${formatMesos(remainingPool)} 메소\n` +
+          (bonusRate > 0 ? `\n용병 몫 제외 금액: ${formatMesos(remainingPool)} 메소\n` : '') +
           bonusLine +
           `고정 재분배 금액: ${formatMesos(afterBonusPool)} 메소 ÷ ${regularCount}명\n\n` +
           leaderSection +
