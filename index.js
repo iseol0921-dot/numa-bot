@@ -438,6 +438,12 @@ const msg = await interaction.channel.send({ embeds: [embed] });
 
         const leaderBonusText = bonusRate > 0 ? ` + 고생금 ${formatMesos(leaderBonus)} 메소` : '';
 
+        const leaderSection = bonusRate > 0
+          ? `👑 공대장\n` +
+            `기본 몫: ${formatMesos(regularShare)} 메소${leaderBonusText}\n` +
+            `실수령액: ${formatMesos(leaderTotal)} 메소 (본인 몫이라 택배비 없음)\n\n`
+          : '';
+
         await interaction.reply(
           `💰 공대 분배 정산 결과\n\n` +
           `경매장 수령금액 합계: ${formatMesos(auctionTotal)} 메소\n` +
@@ -450,9 +456,7 @@ const msg = await interaction.channel.send({ embeds: [embed] });
           `\n용병 몫 제외 금액: ${formatMesos(remainingPool)} 메소\n` +
           bonusLine +
           `고정 재분배 금액: ${formatMesos(afterBonusPool)} 메소 ÷ ${regularCount}명\n\n` +
-          `👑 공대장\n` +
-          `기본 몫: ${formatMesos(regularShare)} 메소${leaderBonusText}\n` +
-          `실수령액: ${formatMesos(leaderTotal)} 메소 (본인 몫이라 택배비 없음)\n\n` +
+          leaderSection +
           `👥 고정공대원 (공대장 제외, ${otherRegularCount}명)\n` +
           `1인 기본 몫: ${formatMesos(regularShare)} 메소\n` +
           `📦 택배(수수료 8%+1만): 수수료 ${formatMesos(regularFeePerSend)} 제외 송금액 ${formatMesos(regularReceive)} 메소\n` +
