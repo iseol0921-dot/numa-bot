@@ -373,7 +373,7 @@ const msg = await interaction.channel.send({ embeds: [embed] });
         const regularCount = people - mercenaryCount;
         if (regularCount <= 0) {
           await interaction.reply({
-            content: '정규 길드원이 0명이야. 공대장 몫을 계산할 수 없어. 용병인원수를 확인해줘.',
+            content: '고정공대원이 0명이야. 공대장 몫을 계산할 수 없어. 용병인원수를 확인해줘.',
             ephemeral: true
           });
           return;
@@ -396,9 +396,9 @@ const msg = await interaction.channel.send({ embeds: [embed] });
         const leaderBonus = Math.floor(remainingPool * bonusRate / 100);
         const afterBonusPool = remainingPool - leaderBonus;
 
-        // 3) 보너스 뗀 나머지를 정규 길드원(공대장 포함) 인원수로 재분배
+        // 3) 보너스 뗀 나머지를 고정공대원(공대장 포함) 인원수로 재분배
         const regularShare = Math.floor(afterBonusPool / regularCount);
-        const otherRegularCount = regularCount - 1; // 공대장 제외 정규길드원
+        const otherRegularCount = regularCount - 1; // 공대장 제외 고정공대원
         const leaderTotal = regularShare + leaderBonus; // 공대장은 자기 몫이라 택배비 없음
 
         // 택배비: 몫 R에서 수수료(8%+1만)를 미리 뗀 금액을 분배장이 보내고, 받는사람은 그 금액을 받음
@@ -428,13 +428,15 @@ const msg = await interaction.channel.send({ embeds: [embed] });
         const mercenaryLine = mercenaryCount > 0
           ? `\n👤 용병 (${mercenaryCount}명)\n` +
             `1인 기본 몫: ${formatMesos(mercenaryShare)} 메소\n` +
-            `📦 택배(수수료 8%+1만): 수수료 ${formatMesos(mercenaryFeePerSend)} 제외 실수령 ${formatMesos(mercenaryReceive)} 메소\n` +
+            `📦 택배(수수료 8%+1만): 수수료 ${formatMesos(mercenaryFeePerSend)} 제외 송금액 ${formatMesos(mercenaryReceive)} 메소\n` +
             `🤝 직거래(수수료 6% 받는사람 부담): 수수료 ${formatMesos(mercenaryDirectFee)} 제외 실수령 ${formatMesos(mercenaryDirectReceive)} 메소\n`
           : '';
 
         const bonusLine = bonusRate > 0
           ? `공대장 고생금(${bonusRate}%) 차감: -${formatMesos(leaderBonus)} 메소\n`
           : '';
+
+        const leaderBonusText = bonusRate > 0 ? ` + 고생금 ${formatMesos(leaderBonus)} 메소` : '';
 
         await interaction.reply(
           `💰 공대 분배 정산 결과\n\n` +
@@ -443,19 +445,18 @@ const msg = await interaction.channel.send({ embeds: [embed] });
           eyeOfFireLine +
           scatterLine +
           `\n총 정산금: ${formatMesos(totalPool)} 메소\n` +
-          `전체 인원: ${people}명 (용병 ${mercenaryCount}명 / 정규 ${regularCount}명)\n` +
+          `전체 인원: ${people}명 (용병 ${mercenaryCount}명 / 고정 ${regularCount}명)\n` +
           mercenaryLine +
           `\n용병 몫 제외 금액: ${formatMesos(remainingPool)} 메소\n` +
           bonusLine +
-          `정규 재분배 금액: ${formatMesos(afterBonusPool)} 메소 ÷ ${regularCount}명\n\n` +
+          `고정 재분배 금액: ${formatMesos(afterBonusPool)} 메소 ÷ ${regularCount}명\n\n` +
           `👑 공대장\n` +
-          `기본 몫: ${formatMesos(regularShare)} 메소 + 고생금 ${formatMesos(leaderBonus)} 메소\n` +
+          `기본 몫: ${formatMesos(regularShare)} 메소${leaderBonusText}\n` +
           `실수령액: ${formatMesos(leaderTotal)} 메소 (본인 몫이라 택배비 없음)\n\n` +
-          `👥 정규 길드원 (공대장 제외, ${otherRegularCount}명)\n` +
+          `👥 고정공대원 (공대장 제외, ${otherRegularCount}명)\n` +
           `1인 기본 몫: ${formatMesos(regularShare)} 메소\n` +
-          `📦 택배(수수료 8%+1만): 수수료 ${formatMesos(regularFeePerSend)} 제외 실수령 ${formatMesos(regularReceive)} 메소\n` +
-          `🤝 직거래(수수료 6% 받는사람 부담): 수수료 ${formatMesos(regularDirectFee)} 제외 실수령 ${formatMesos(regularDirectReceive)} 메소\n\n` +
-          `📦 총 택배비: ${formatMesos(mercenaryTotalFee + regularTotalFee)} 메소`
+          `📦 택배(수수료 8%+1만): 수수료 ${formatMesos(regularFeePerSend)} 제외 송금액 ${formatMesos(regularReceive)} 메소\n` +
+          `🤝 직거래(수수료 6% 받는사람 부담): 수수료 ${formatMesos(regularDirectFee)} 제외 실수령 ${formatMesos(regularDirectReceive)} 메소`
         );
         return;
       }
