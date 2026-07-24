@@ -14,6 +14,11 @@ const SERVER_IDS = [
 const DATA_FILE = './data.json';
 const NOTICE_REFRESH_COUNT = 5;
 
+// ===== 아이템 거래방 자동 리셋 설정 =====
+const TRADE_CHANNEL_ID = '1507418733520617745'; // 아이템 거래방
+const RESET_INTERVAL_DAYS = 2;
+const RESET_CHECK_INTERVAL_MS = 60 * 60 * 1000; // 1시간마다 체크
+
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -23,15 +28,16 @@ const client = new Client({
 });
 
 function loadData() {
-  if (!fs.existsSync(DATA_FILE)) return { raids: {}, notices: {}, contribution: {} };
+  if (!fs.existsSync(DATA_FILE)) return { raids: {}, notices: {}, contribution: {}, resetState: {} };
   try {
     const data = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
     if (!data.raids) data.raids = {};
     if (!data.notices) data.notices = {};
     if (!data.contribution) data.contribution = {};
+    if (!data.resetState) data.resetState = {};
     return data;
   } catch {
-    return { raids: {}, notices: {}, contribution: {} };
+    return { raids: {}, notices: {}, contribution: {}, resetState: {} };
   }
 }
 
@@ -192,6 +198,71 @@ async function getAllPollVoters(message) {
   return voterIds;
 }
 
+// ===== 아이템 거래방 자동 리셋 로직 =====
+
+// 채널의 모든 메시지를 삭제 (14일 이내 메시지는 bulkDelete, 그 이상은 개별 삭제)
+async function purgeChannelMessages(channel) {
+  let totalDeleted = 0;
+
+  while (true) {
+    const messages = await channel.messages.fetch({ limit: 100 }).catch(() => null);
+    if (!messages || messages.size === 0) break;
+
+    // 14일 이내 메시지는 bulkDelete로 한번에, 오래된 메시지는 개별 삭제
+    const bulkDeletable = messages.filter(
+      m => Date.now() - m.createdTimestamp < 14 * 24 * 60 * 60 * 1000
+    );
+    const tooOld = messages.filter(
+      m => Date.now() - m.createdTimestamp >= 14 * 24 * 60 * 60 * 1000
+    );
+
+    if (bulkDeletable.size > 0) {
+      const deleted = await channel.bulkDelete(bulkDeletable, true).catch(() => null);
+      totalDeleted += deleted ? deleted.size : 0;
+    }
+
+    for (const [, msg] of tooOld) {
+      await msg.delete().catch(() => {});
+      totalDeleted += 1;
+    }
+
+    if (messages.size < 100) break;
+  }
+
+  return totalDeleted;
+}
+
+async function resetTradeChannel() {
+  const channel = await client.channels.fetch(TRADE_CHANNEL_ID).catch(() => null);
+  if (!channel) {
+    console.error('[거래방 리셋] 채널을 찾을 수 없음. TRADE_CHANNEL_ID 확인 필요');
+    return;
+  }
+
+  const deletedCount = await purgeChannelMessages(channel);
+  console.log(`[거래방 리셋] ${deletedCount}개 메시지 삭제됨`);
+
+  const notice = await channel.send('🔄 아이템 거래방 내역이 초기화되었습니다.');
+  setTimeout(() => notice.delete().catch(() => {}), 10000);
+}
+
+async function checkAndResetTradeChannel() {
+  const data = loadData();
+  const lastResetStr = data.resetState?.tradeChannel;
+  const lastReset = lastResetStr ? new Date(lastResetStr) : null;
+  const now = new Date();
+
+  const dueForReset =
+    !lastReset || (now.getTime() - lastReset.getTime()) >= RESET_INTERVAL_DAYS * 24 * 60 * 60 * 1000;
+
+  if (!dueForReset) return;
+
+  await resetTradeChannel();
+
+  data.resetState.tradeChannel = now.toISOString();
+  saveData(data);
+}
+
 const commands = [
   new SlashCommandBuilder()
     .setName('모집생성')
@@ -233,12 +304,16 @@ const commands = [
       o.setName('메시지링크')
         .setDescription('투표 메시지 우클릭 → 링크 복사 로 가져온 주소')
         .setRequired(true)
-    )
+    ),
+
+  new SlashCommandBuilder()
+    .setName('거래방리셋')
+    .setDescription('아이템 거래방 내역을 지금 바로 초기화합니다 (관리자 전용)')
 ].map(c => c.toJSON());
 
 client.once('ready', async () => {
   console.log(`${client.user.tag} 로그인 완료!`);
-  if (!fs.existsSync(DATA_FILE)) saveData({ raids: {}, notices: {}, contribution: {} });
+  if (!fs.existsSync(DATA_FILE)) saveData({ raids: {}, notices: {}, contribution: {}, resetState: {} });
 
   const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
 
@@ -252,6 +327,12 @@ client.once('ready', async () => {
   }
 
   console.log('모든 서버 명령어 등록 완료!');
+
+  // 봇 시작 시 한 번 체크 (재시작 사이에 주기를 놓친 경우 대비), 이후 1시간마다 체크
+  checkAndResetTradeChannel().catch(err => console.error('[거래방 리셋] 초기 체크 오류:', err));
+  setInterval(() => {
+    checkAndResetTradeChannel().catch(err => console.error('[거래방 리셋] 체크 오류:', err));
+  }, RESET_CHECK_INTERVAL_MS);
 });
 
 client.on('messageCreate', async message => {
@@ -285,6 +366,23 @@ client.on('messageCreate', async message => {
 client.on('interactionCreate', async interaction => {
   try {
     if (interaction.isChatInputCommand()) {
+      if (interaction.commandName === '거래방리셋') {
+        if (!interaction.member.permissions.has('Administrator')) {
+          await interaction.reply({ content: '관리자만 사용할 수 있어.', ephemeral: true });
+          return;
+        }
+
+        await interaction.deferReply({ ephemeral: true });
+        await resetTradeChannel();
+
+        const data = loadData();
+        data.resetState.tradeChannel = new Date().toISOString();
+        saveData(data);
+
+        await interaction.editReply('✅ 아이템 거래방을 초기화했어. 다음 자동 리셋 주기도 지금부터 다시 계산돼.');
+        return;
+      }
+
       if (interaction.commandName === '상시공지설정') {
         const content = interaction.options.getString('내용');
         const guildId = interaction.guildId;
