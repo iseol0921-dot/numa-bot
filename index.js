@@ -308,7 +308,11 @@ const commands = [
 
   new SlashCommandBuilder()
     .setName('거래방리셋')
-    .setDescription('아이템 거래방 내역을 지금 바로 초기화합니다 (관리자 전용)')
+    .setDescription('아이템 거래방 내역을 지금 바로 초기화합니다 (관리자 전용)'),
+
+  new SlashCommandBuilder()
+    .setName('채팅내역삭제')
+    .setDescription('이 채널의 채팅 내역을 전부 삭제합니다 (관리자 전용)')
 ].map(c => c.toJSON());
 
 client.once('ready', async () => {
@@ -380,6 +384,27 @@ client.on('interactionCreate', async interaction => {
         saveData(data);
 
         await interaction.editReply('✅ 아이템 거래방을 초기화했어. 다음 자동 리셋 주기도 지금부터 다시 계산돼.');
+        return;
+      }
+
+      if (interaction.commandName === '채팅내역삭제') {
+        if (!interaction.member.permissions.has('Administrator')) {
+          await interaction.reply({ content: '관리자만 사용할 수 있어.', ephemeral: true });
+          return;
+        }
+
+        await interaction.deferReply({ ephemeral: true });
+
+        const deletedCount = await purgeChannelMessages(interaction.channel);
+
+        // 이 채널이 아이템 거래방이면 자동 리셋 주기도 지금부터 다시 계산
+        if (interaction.channelId === TRADE_CHANNEL_ID) {
+          const data = loadData();
+          data.resetState.tradeChannel = new Date().toISOString();
+          saveData(data);
+        }
+
+        await interaction.editReply(`✅ 이 채널의 채팅 내역 ${deletedCount}개를 삭제했어.`);
         return;
       }
 
