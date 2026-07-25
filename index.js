@@ -20,14 +20,32 @@ const TRADE_CHANNEL_ID = '1507418733520617745'; // 아이템 거래방
 const RESET_INTERVAL_DAYS = 2;
 const RESET_CHECK_INTERVAL_MS = 60 * 60 * 1000; // 1시간마다 체크
 
-// ===== 티켓 시스템 설정 (서버별로 다른 카테고리/역할을 쓰고 싶으면 여기에 추가) =====
-const TICKET_CONFIG = {
-  '1506990201204117565': {
-    categoryId: '1519649176432939068',
-    staffRoleIds: ['1506996344563171458', '1506996779139207239']
+// ===== 티켓 시스템 설정 =====
+// 티켓 종류(type)별 + 서버(guildId)별로 카테고리/운영진 역할을 지정.
+// 같은 서버에 티켓 종류를 추가하고 싶으면 해당 종류의 guilds 객체에 줄만 추가하면 됨.
+const TICKET_TYPES = {
+  join: {
+    label: '가입문의 티켓',
+    channelPrefix: 'ticket',
+    guilds: {
+      '1506990201204117565': {
+        categoryId: '1530476075753275412',
+        staffRoleIds: ['1506996344563171458', '1506996779139207239']
+      }
+      // '1519109990101815386': { categoryId: '...', staffRoleIds: ['...'] },
+      // '1507442329890455662': { categoryId: '...', staffRoleIds: ['...'] },
+    }
   },
-  // '1519109990101815386': { categoryId: '여기에_첫번째_서버_카테고리_ID', staffRoleIds: ['여기에_첫번째_서버_운영진_역할_ID'] },
-  // '1507442329890455662': { categoryId: '여기에_세번째_서버_카테고리_ID', staffRoleIds: ['여기에_세번째_서버_운영진_역할_ID'] },
+  inquiry: {
+    label: '문의/상담 티켓',
+    channelPrefix: 'inquiry',
+    guilds: {
+      '1506990201204117565': {
+        categoryId: '1506990407853281432',
+        staffRoleIds: ['1506996344563171458', '1506996779139207239']
+      }
+    }
+  }
 };
 
 const client = new Client({
@@ -277,18 +295,18 @@ async function checkAndResetTradeChannel() {
 
 // ===== 티켓 시스템 로직 =====
 
-function makeTicketPanelEmbed() {
+function makeTicketPanelEmbed(type) {
   return new EmbedBuilder()
-    .setTitle('🎫 문의 티켓')
+    .setTitle(`🎫 ${TICKET_TYPES[type].label}`)
     .setDescription('아래 버튼을 눌러 개인 문의 채널을 생성해줘.')
     .setColor(0xff69b4);
 }
 
-function makeTicketPanelButton() {
+function makeTicketPanelButton(type) {
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder()
-      .setCustomId('create_ticket')
-      .setLabel('티켓 생성')
+      .setCustomId(`create_ticket:${type}`)
+      .setLabel(`${TICKET_TYPES[type].label} 생성`)
       .setStyle(ButtonStyle.Primary)
       .setEmoji('🎫')
   );
@@ -304,12 +322,13 @@ function makeTicketCloseButton() {
   );
 }
 
-async function handleCreateTicket(interaction) {
+async function handleCreateTicket(interaction, type) {
   const data = loadData();
   const guild = interaction.guild;
   const user = interaction.user;
 
-  const config = TICKET_CONFIG[guild.id];
+  const ticketType = TICKET_TYPES[type];
+  const config = ticketType?.guilds?.[guild.id];
   if (!config) {
     await interaction.reply({
       content: '이 서버에는 티켓 설정이 안 되어 있어. 관리자에게 문의해줘.',
@@ -318,18 +337,19 @@ async function handleCreateTicket(interaction) {
     return;
   }
 
-  // 이미 열려있는 티켓이 있는지 확인
+  // 같은 종류의 티켓이 이미 열려있는지 확인 (종류별로 따로 카운트)
   const existingChannelId = Object.keys(data.tickets).find(
     channelId =>
       data.tickets[channelId].userId === user.id &&
-      data.tickets[channelId].guildId === guild.id
+      data.tickets[channelId].guildId === guild.id &&
+      data.tickets[channelId].type === type
   );
 
   if (existingChannelId) {
     const existingChannel = guild.channels.cache.get(existingChannelId);
     if (existingChannel) {
       await interaction.reply({
-        content: `이미 열려있는 티켓이 있어: ${existingChannel}`,
+        content: `이미 열려있는 ${ticketType.label}이 있어: ${existingChannel}`,
         ephemeral: true
       });
       return;
@@ -340,7 +360,7 @@ async function handleCreateTicket(interaction) {
   }
 
   const ticketChannel = await guild.channels.create({
-    name: `ticket-${user.username}`,
+    name: `${ticketType.channelPrefix}-${user.username}`,
     type: ChannelType.GuildText,
     parent: config.categoryId,
     permissionOverwrites: [
@@ -370,19 +390,20 @@ async function handleCreateTicket(interaction) {
   data.tickets[ticketChannel.id] = {
     userId: user.id,
     guildId: guild.id,
+    type,
     createdAt: new Date().toISOString()
   };
   saveData(data);
 
   const embed = new EmbedBuilder()
-    .setTitle('🎫 문의 티켓')
+    .setTitle(`🎫 ${ticketType.label}`)
     .setDescription(`${user} 님, 문의 내용을 남겨줘. 스태프가 확인 후 답변할게.`)
     .setColor(0xff69b4);
 
   await ticketChannel.send({ embeds: [embed], components: [makeTicketCloseButton()] });
 
   await interaction.reply({
-    content: `✅ 티켓이 생성됐어: ${ticketChannel}`,
+    content: `✅ ${ticketType.label}이 생성됐어: ${ticketChannel}`,
     ephemeral: true
   });
 }
@@ -390,7 +411,7 @@ async function handleCreateTicket(interaction) {
 async function handleCloseTicket(interaction) {
   const data = loadData();
   const ticket = data.tickets[interaction.channelId];
-  const config = TICKET_CONFIG[interaction.guildId];
+  const config = ticket ? TICKET_TYPES[ticket.type]?.guilds?.[interaction.guildId] : null;
 
   const isStaff =
     interaction.member.permissions.has('Administrator') ||
@@ -466,6 +487,15 @@ const commands = [
   new SlashCommandBuilder()
     .setName('티켓패널생성')
     .setDescription('이 채널에 티켓 생성 버튼 패널을 올립니다 (관리자 전용)')
+    .addStringOption(o =>
+      o.setName('종류')
+        .setDescription('생성할 티켓 종류')
+        .setRequired(true)
+        .addChoices(
+          { name: '가입문의 티켓', value: 'join' },
+          { name: '문의/상담 티켓', value: 'inquiry' }
+        )
+    )
 ].map(c => c.toJSON());
 
 client.once('ready', async () => {
@@ -529,12 +559,14 @@ client.on('interactionCreate', async interaction => {
           return;
         }
 
+        const type = interaction.options.getString('종류');
+
         await interaction.channel.send({
-          embeds: [makeTicketPanelEmbed()],
-          components: [makeTicketPanelButton()]
+          embeds: [makeTicketPanelEmbed(type)],
+          components: [makeTicketPanelButton(type)]
         });
 
-        await interaction.reply({ content: '✅ 티켓 패널을 올렸어.', ephemeral: true });
+        await interaction.reply({ content: `✅ ${TICKET_TYPES[type].label} 패널을 올렸어.`, ephemeral: true });
         return;
       }
 
@@ -851,8 +883,9 @@ const msg = await interaction.channel.send({ embeds: [embed] });
     }
 
     if (interaction.isButton()) {
-      if (interaction.customId === 'create_ticket') {
-        await handleCreateTicket(interaction);
+      if (interaction.customId.startsWith('create_ticket:')) {
+        const type = interaction.customId.split(':')[1];
+        await handleCreateTicket(interaction, type);
         return;
       }
 
