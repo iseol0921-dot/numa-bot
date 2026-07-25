@@ -29,7 +29,7 @@ const TICKET_TYPES = {
     channelPrefix: 'ticket',
     guilds: {
       '1506990201204117565': {
-        categoryId: '1530476075753275412',
+        categoryId: '1530486582111506432',
         staffRoleIds: ['1506996344563171458', '1506996779139207239']
       }
       // '1519109990101815386': { categoryId: '...', staffRoleIds: ['...'] },
