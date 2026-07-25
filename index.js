@@ -20,9 +20,12 @@ const TRADE_CHANNEL_ID = '1507418733520617745'; // 아이템 거래방
 const RESET_INTERVAL_DAYS = 2;
 const RESET_CHECK_INTERVAL_MS = 60 * 60 * 1000; // 1시간마다 체크
 
-// ===== 티켓 시스템 설정 =====
-const TICKET_CATEGORY_ID = '티켓_카테고리_ID'; // 티켓 채널이 생성될 카테고리 ID로 교체
-const TICKET_STAFF_ROLE_ID = '스태프_역할_ID'; // 티켓을 볼 수 있는 스태프 역할 ID로 교체
+// ===== 티켓 시스템 설정 (서버별로 다른 카테고리/역할을 쓰고 싶으면 여기에 추가) =====
+const TICKET_CONFIG = {
+  '1519109990101815386': { categoryId: '1530475264231084083', staffRoleId: '1506996779139207239' },
+  // '1506990201204117565': { categoryId: '여기에_두번째_서버_카테고리_ID', staffRoleId: '여기에_두번째_서버_운영진_역할_ID' },
+  // '1507442329890455662': { categoryId: '여기에_세번째_서버_카테고리_ID', staffRoleId: '여기에_세번째_서버_운영진_역할_ID' },
+};
 
 const client = new Client({
   intents: [
@@ -303,6 +306,15 @@ async function handleCreateTicket(interaction) {
   const guild = interaction.guild;
   const user = interaction.user;
 
+  const config = TICKET_CONFIG[guild.id];
+  if (!config) {
+    await interaction.reply({
+      content: '이 서버에는 티켓 설정이 안 되어 있어. 관리자에게 문의해줘.',
+      ephemeral: true
+    });
+    return;
+  }
+
   // 이미 열려있는 티켓이 있는지 확인
   const existingChannelId = Object.keys(data.tickets).find(
     channelId =>
@@ -327,7 +339,7 @@ async function handleCreateTicket(interaction) {
   const ticketChannel = await guild.channels.create({
     name: `ticket-${user.username}`,
     type: ChannelType.GuildText,
-    parent: TICKET_CATEGORY_ID,
+    parent: config.categoryId,
     permissionOverwrites: [
       {
         id: guild.roles.everyone.id,
@@ -342,7 +354,7 @@ async function handleCreateTicket(interaction) {
         ]
       },
       {
-        id: TICKET_STAFF_ROLE_ID,
+        id: config.staffRoleId,
         allow: [
           PermissionFlagsBits.ViewChannel,
           PermissionFlagsBits.SendMessages,
@@ -375,10 +387,11 @@ async function handleCreateTicket(interaction) {
 async function handleCloseTicket(interaction) {
   const data = loadData();
   const ticket = data.tickets[interaction.channelId];
+  const config = TICKET_CONFIG[interaction.guildId];
 
   const isStaff =
     interaction.member.permissions.has('Administrator') ||
-    interaction.member.roles.cache.has(TICKET_STAFF_ROLE_ID);
+    (config && interaction.member.roles.cache.has(config.staffRoleId));
   const isOwner = ticket?.userId === interaction.user.id;
 
   if (!isStaff && !isOwner) {
@@ -1063,7 +1076,7 @@ if (existing && !isAdmin) {
           });
     }
   } catch (error) {
-  
+    console.error('interactionCreate 오류:', error);
 
     try {
       if (interaction.deferred || interaction.replied) {
