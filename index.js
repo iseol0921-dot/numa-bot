@@ -1,7 +1,8 @@
 import {
   Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder,
   ActionRowBuilder, ButtonBuilder, ButtonStyle,
-  ModalBuilder, TextInputBuilder, TextInputStyle, EmbedBuilder
+  ModalBuilder, TextInputBuilder, TextInputStyle, EmbedBuilder,
+  ChannelType, PermissionFlagsBits
 } from 'discord.js';
 import fs from 'fs';
 
@@ -19,6 +20,10 @@ const TRADE_CHANNEL_ID = '1507418733520617745'; // 아이템 거래방
 const RESET_INTERVAL_DAYS = 2;
 const RESET_CHECK_INTERVAL_MS = 60 * 60 * 1000; // 1시간마다 체크
 
+// ===== 티켓 시스템 설정 =====
+const TICKET_CATEGORY_ID = '티켓_카테고리_ID'; // 티켓 채널이 생성될 카테고리 ID로 교체
+const TICKET_STAFF_ROLE_ID = '스태프_역할_ID'; // 티켓을 볼 수 있는 스태프 역할 ID로 교체
+
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -28,16 +33,17 @@ const client = new Client({
 });
 
 function loadData() {
-  if (!fs.existsSync(DATA_FILE)) return { raids: {}, notices: {}, contribution: {}, resetState: {} };
+  if (!fs.existsSync(DATA_FILE)) return { raids: {}, notices: {}, contribution: {}, resetState: {}, tickets: {} };
   try {
     const data = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
     if (!data.raids) data.raids = {};
     if (!data.notices) data.notices = {};
     if (!data.contribution) data.contribution = {};
     if (!data.resetState) data.resetState = {};
+    if (!data.tickets) data.tickets = {};
     return data;
   } catch {
-    return { raids: {}, notices: {}, contribution: {}, resetState: {} };
+    return { raids: {}, notices: {}, contribution: {}, resetState: {}, tickets: {} };
   }
 }
 
@@ -263,6 +269,133 @@ async function checkAndResetTradeChannel() {
   saveData(data);
 }
 
+// ===== 티켓 시스템 로직 =====
+
+function makeTicketPanelEmbed() {
+  return new EmbedBuilder()
+    .setTitle('🎫 문의 티켓')
+    .setDescription('아래 버튼을 눌러 개인 문의 채널을 생성해줘.')
+    .setColor(0xff69b4);
+}
+
+function makeTicketPanelButton() {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId('create_ticket')
+      .setLabel('티켓 생성')
+      .setStyle(ButtonStyle.Primary)
+      .setEmoji('🎫')
+  );
+}
+
+function makeTicketCloseButton() {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId('close_ticket')
+      .setLabel('티켓 닫기')
+      .setStyle(ButtonStyle.Danger)
+      .setEmoji('🔒')
+  );
+}
+
+async function handleCreateTicket(interaction) {
+  const data = loadData();
+  const guild = interaction.guild;
+  const user = interaction.user;
+
+  // 이미 열려있는 티켓이 있는지 확인
+  const existingChannelId = Object.keys(data.tickets).find(
+    channelId =>
+      data.tickets[channelId].userId === user.id &&
+      data.tickets[channelId].guildId === guild.id
+  );
+
+  if (existingChannelId) {
+    const existingChannel = guild.channels.cache.get(existingChannelId);
+    if (existingChannel) {
+      await interaction.reply({
+        content: `이미 열려있는 티켓이 있어: ${existingChannel}`,
+        ephemeral: true
+      });
+      return;
+    }
+    // 채널이 실제로는 없는데 데이터만 남아있는 경우 정리
+    delete data.tickets[existingChannelId];
+    saveData(data);
+  }
+
+  const ticketChannel = await guild.channels.create({
+    name: `ticket-${user.username}`,
+    type: ChannelType.GuildText,
+    parent: TICKET_CATEGORY_ID,
+    permissionOverwrites: [
+      {
+        id: guild.roles.everyone.id,
+        deny: [PermissionFlagsBits.ViewChannel]
+      },
+      {
+        id: user.id,
+        allow: [
+          PermissionFlagsBits.ViewChannel,
+          PermissionFlagsBits.SendMessages,
+          PermissionFlagsBits.ReadMessageHistory
+        ]
+      },
+      {
+        id: TICKET_STAFF_ROLE_ID,
+        allow: [
+          PermissionFlagsBits.ViewChannel,
+          PermissionFlagsBits.SendMessages,
+          PermissionFlagsBits.ReadMessageHistory
+        ]
+      }
+    ]
+  });
+
+  data.tickets[ticketChannel.id] = {
+    userId: user.id,
+    guildId: guild.id,
+    createdAt: new Date().toISOString()
+  };
+  saveData(data);
+
+  const embed = new EmbedBuilder()
+    .setTitle('🎫 문의 티켓')
+    .setDescription(`${user} 님, 문의 내용을 남겨줘. 스태프가 확인 후 답변할게.`)
+    .setColor(0xff69b4);
+
+  await ticketChannel.send({ embeds: [embed], components: [makeTicketCloseButton()] });
+
+  await interaction.reply({
+    content: `✅ 티켓이 생성됐어: ${ticketChannel}`,
+    ephemeral: true
+  });
+}
+
+async function handleCloseTicket(interaction) {
+  const data = loadData();
+  const ticket = data.tickets[interaction.channelId];
+
+  const isStaff =
+    interaction.member.permissions.has('Administrator') ||
+    interaction.member.roles.cache.has(TICKET_STAFF_ROLE_ID);
+  const isOwner = ticket?.userId === interaction.user.id;
+
+  if (!isStaff && !isOwner) {
+    await interaction.reply({ content: '티켓 생성자나 스태프만 닫을 수 있어.', ephemeral: true });
+    return;
+  }
+
+  await interaction.reply('🔒 5초 후 이 티켓을 닫을게...');
+
+  delete data.tickets[interaction.channelId];
+  saveData(data);
+
+  setTimeout(() => {
+    interaction.channel.delete().catch(() => {});
+  }, 5000);
+}
+
 const commands = [
   new SlashCommandBuilder()
     .setName('모집생성')
@@ -312,12 +445,16 @@ const commands = [
 
   new SlashCommandBuilder()
     .setName('채팅내역삭제')
-    .setDescription('이 채널의 채팅 내역을 전부 삭제합니다 (관리자 전용)')
+    .setDescription('이 채널의 채팅 내역을 전부 삭제합니다 (관리자 전용)'),
+
+  new SlashCommandBuilder()
+    .setName('티켓패널생성')
+    .setDescription('이 채널에 티켓 생성 버튼 패널을 올립니다 (관리자 전용)')
 ].map(c => c.toJSON());
 
 client.once('ready', async () => {
   console.log(`${client.user.tag} 로그인 완료!`);
-  if (!fs.existsSync(DATA_FILE)) saveData({ raids: {}, notices: {}, contribution: {}, resetState: {} });
+  if (!fs.existsSync(DATA_FILE)) saveData({ raids: {}, notices: {}, contribution: {}, resetState: {}, tickets: {} });
 
   const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
 
@@ -370,6 +507,21 @@ client.on('messageCreate', async message => {
 client.on('interactionCreate', async interaction => {
   try {
     if (interaction.isChatInputCommand()) {
+      if (interaction.commandName === '티켓패널생성') {
+        if (!interaction.member.permissions.has('Administrator')) {
+          await interaction.reply({ content: '관리자만 사용할 수 있어.', ephemeral: true });
+          return;
+        }
+
+        await interaction.channel.send({
+          embeds: [makeTicketPanelEmbed()],
+          components: [makeTicketPanelButton()]
+        });
+
+        await interaction.reply({ content: '✅ 티켓 패널을 올렸어.', ephemeral: true });
+        return;
+      }
+
       if (interaction.commandName === '거래방리셋') {
         if (!interaction.member.permissions.has('Administrator')) {
           await interaction.reply({ content: '관리자만 사용할 수 있어.', ephemeral: true });
@@ -683,6 +835,16 @@ const msg = await interaction.channel.send({ embeds: [embed] });
     }
 
     if (interaction.isButton()) {
+      if (interaction.customId === 'create_ticket') {
+        await handleCreateTicket(interaction);
+        return;
+      }
+
+      if (interaction.customId === 'close_ticket') {
+        await handleCloseTicket(interaction);
+        return;
+      }
+
       const [action, raidId] = interaction.customId.split(':');
       const data = loadData();
 
