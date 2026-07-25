@@ -485,17 +485,12 @@ const commands = [
     .setDescription('이 채널의 채팅 내역을 전부 삭제합니다 (관리자 전용)'),
 
   new SlashCommandBuilder()
-    .setName('티켓패널생성')
-    .setDescription('이 채널에 티켓 생성 버튼 패널을 올립니다 (관리자 전용)')
-    .addStringOption(o =>
-      o.setName('종류')
-        .setDescription('생성할 티켓 종류')
-        .setRequired(true)
-        .addChoices(
-          { name: '가입문의 티켓', value: 'join' },
-          { name: '문의/상담 티켓', value: 'inquiry' }
-        )
-    )
+    .setName('가입문의패널')
+    .setDescription('이 채널에 가입문의 티켓 생성 버튼 패널을 올립니다 (관리자 전용)'),
+
+  new SlashCommandBuilder()
+    .setName('문의및상담패널')
+    .setDescription('이 채널에 문의/상담 티켓 생성 버튼 패널을 올립니다 (관리자 전용)')
 ].map(c => c.toJSON());
 
 client.once('ready', async () => {
@@ -553,13 +548,13 @@ client.on('messageCreate', async message => {
 client.on('interactionCreate', async interaction => {
   try {
     if (interaction.isChatInputCommand()) {
-      if (interaction.commandName === '티켓패널생성') {
+      if (interaction.commandName === '가입문의패널' || interaction.commandName === '문의및상담패널') {
         if (!interaction.member.permissions.has('Administrator')) {
           await interaction.reply({ content: '관리자만 사용할 수 있어.', ephemeral: true });
           return;
         }
 
-        const type = interaction.options.getString('종류');
+        const type = interaction.commandName === '가입문의패널' ? 'join' : 'inquiry';
 
         await interaction.channel.send({
           embeds: [makeTicketPanelEmbed(type)],
