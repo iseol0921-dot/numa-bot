@@ -80,13 +80,17 @@ function withoutMercenaryPrefix(nickname) {
 }
 
 async function setMercenaryNickname(member, isMercenary) {
-  const currentName = member.nickname || member.user.username;
+  const currentName = member.displayName;
   const targetName = isMercenary ? withMercenaryPrefix(currentName) : withoutMercenaryPrefix(currentName);
 
   if (targetName === currentName) return;
   if (targetName.length > 32) return; // 디스코드 닉네임 길이 제한
 
-  await member.setNickname(targetName).catch(() => {});
+  try {
+    await member.setNickname(targetName);
+  } catch (err) {
+    console.error('[용병 닉네임 변경 실패]', member.user.tag, err.message);
+  }
 }
 
 const client = new Client({
