@@ -41,10 +41,6 @@ const TICKET_TYPES = {
     label: '문의/상담 티켓',
     channelPrefix: 'inquiry',
     guilds: {
-      '1506990201204117565': {
-        categoryId: '1506990407853281432',
-        staffRoleIds: ['1506996344563171458', '1506996779139207239']
-      },
       '1530925354141749258': {
         categoryId: '1530931388646162504',
         staffRoleIds: ['1537593535102984212']
