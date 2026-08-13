@@ -41,6 +41,10 @@ const TICKET_TYPES = {
     label: '문의/상담 티켓',
     channelPrefix: 'inquiry',
     guilds: {
+      '1506990201204117565': {
+        categoryId: '1506990407853281432',
+        staffRoleIds: ['1506996344563171458', '1506996779139207239']
+      },
       '1530925354141749258': {
         categoryId: '1530931388646162504',
         staffRoleIds: ['1537593535102984212']
@@ -65,6 +69,25 @@ const JOB_ROLES = {
 
 const JOB_ORDER = ['전사', '궁수', '도적', '법사', '해적'];
 const MERCENARY_JOB = '용병';
+const MERCENARY_PREFIX = '[용병] ';
+
+function withMercenaryPrefix(nickname) {
+  return nickname.startsWith(MERCENARY_PREFIX) ? nickname : `${MERCENARY_PREFIX}${nickname}`;
+}
+
+function withoutMercenaryPrefix(nickname) {
+  return nickname.startsWith(MERCENARY_PREFIX) ? nickname.slice(MERCENARY_PREFIX.length) : nickname;
+}
+
+async function setMercenaryNickname(member, isMercenary) {
+  const currentName = member.nickname || member.user.username;
+  const targetName = isMercenary ? withMercenaryPrefix(currentName) : withoutMercenaryPrefix(currentName);
+
+  if (targetName === currentName) return;
+  if (targetName.length > 32) return; // 디스코드 닉네임 길이 제한
+
+  await member.setNickname(targetName).catch(() => {});
+}
 
 const client = new Client({
   intents: [
@@ -511,6 +534,7 @@ async function handleJobSelect(interaction, job) {
 
   const member = interaction.member;
   const allJobRoleIds = Object.values(jobRoles);
+  const mercenaryRoleId = jobRoles[MERCENARY_JOB];
 
   const rolesToRemove = allJobRoleIds.filter(
     roleId => roleId !== targetRoleId && member.roles.cache.has(roleId)
@@ -521,6 +545,12 @@ async function handleJobSelect(interaction, job) {
 
   if (!member.roles.cache.has(targetRoleId)) {
     await member.roles.add(targetRoleId).catch(() => {});
+  }
+
+  if (job === MERCENARY_JOB) {
+    await setMercenaryNickname(member, true);
+  } else if (mercenaryRoleId && rolesToRemove.includes(mercenaryRoleId)) {
+    await setMercenaryNickname(member, false);
   }
 
   await interaction.reply({ content: `✅ [${job}] 역할로 설정됐어.`, ephemeral: true });
@@ -537,10 +567,15 @@ async function handleJobReset(interaction) {
 
   const member = interaction.member;
   const allJobRoleIds = Object.values(jobRoles);
+  const mercenaryRoleId = jobRoles[MERCENARY_JOB];
   const rolesToRemove = allJobRoleIds.filter(roleId => member.roles.cache.has(roleId));
 
   if (rolesToRemove.length) {
     await member.roles.remove(rolesToRemove).catch(() => {});
+  }
+
+  if (mercenaryRoleId && rolesToRemove.includes(mercenaryRoleId)) {
+    await setMercenaryNickname(member, false);
   }
 
   await interaction.reply({ content: '✅ 직업 역할이 초기화됐어.', ephemeral: true });
@@ -565,6 +600,8 @@ async function handleMercenaryReset(interaction) {
   if (member.roles.cache.has(mercenaryRoleId)) {
     await member.roles.remove(mercenaryRoleId).catch(() => {});
   }
+
+  await setMercenaryNickname(member, false);
 
   await interaction.reply({ content: '✅ 용병 역할이 초기화됐어.', ephemeral: true });
 }
