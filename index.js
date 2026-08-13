@@ -49,6 +49,22 @@ const TICKET_TYPES = {
   }
 };
 
+// ===== 직업패널 설정 =====
+// 서버(guildId)별로 직업 → 역할ID 매핑. 새 서버에 직업패널을 추가하고 싶으면
+// 아래에 guildId 블록만 추가하면 됨.
+const JOB_ROLES = {
+  '1530925354141749258': {
+    전사: '1537004690452250694',
+    궁수: '1537004733028638731',
+    도적: '1537004769971802142',
+    법사: '1537004800602935366',
+    해적: '1537585446781984898',
+    용병: '1537586179287810109'
+  }
+};
+
+const JOB_ORDER = ['전사', '궁수', '도적', '법사', '해적', '용병'];
+
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -434,6 +450,85 @@ async function handleCloseTicket(interaction) {
   }, 5000);
 }
 
+// ===== 직업패널 로직 =====
+
+function makeJobPanelEmbed() {
+  return new EmbedBuilder()
+    .setTitle('⚔️ 직업 선택 패널')
+    .setDescription('아래 버튼에서 본인 직업을 선택해줘. (직업 역할은 1개만 유지돼)')
+    .setColor(0x7c5cff);
+}
+
+function makeJobPanelButtons() {
+  const row1 = new ActionRowBuilder().addComponents(
+    JOB_ORDER.slice(0, 3).map(job =>
+      new ButtonBuilder().setCustomId(`job:${job}`).setLabel(job).setStyle(ButtonStyle.Primary)
+    )
+  );
+  const row2 = new ActionRowBuilder().addComponents(
+    JOB_ORDER.slice(3, 6).map(job =>
+      new ButtonBuilder().setCustomId(`job:${job}`).setLabel(job).setStyle(ButtonStyle.Primary)
+    )
+  );
+  const row3 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('job_reset').setLabel('리셋').setStyle(ButtonStyle.Danger)
+  );
+
+  return [row1, row2, row3];
+}
+
+async function handleJobSelect(interaction, job) {
+  const guildId = interaction.guildId;
+  const jobRoles = JOB_ROLES[guildId];
+
+  if (!jobRoles) {
+    await interaction.reply({ content: '이 서버에는 직업패널 설정이 안 되어 있어. 관리자에게 문의해줘.', ephemeral: true });
+    return;
+  }
+
+  const targetRoleId = jobRoles[job];
+  if (!targetRoleId) {
+    await interaction.reply({ content: '알 수 없는 직업이야.', ephemeral: true });
+    return;
+  }
+
+  const member = interaction.member;
+  const allJobRoleIds = Object.values(jobRoles);
+
+  const rolesToRemove = allJobRoleIds.filter(
+    roleId => roleId !== targetRoleId && member.roles.cache.has(roleId)
+  );
+  if (rolesToRemove.length) {
+    await member.roles.remove(rolesToRemove).catch(() => {});
+  }
+
+  if (!member.roles.cache.has(targetRoleId)) {
+    await member.roles.add(targetRoleId).catch(() => {});
+  }
+
+  await interaction.reply({ content: `✅ [${job}] 역할로 설정됐어.`, ephemeral: true });
+}
+
+async function handleJobReset(interaction) {
+  const guildId = interaction.guildId;
+  const jobRoles = JOB_ROLES[guildId];
+
+  if (!jobRoles) {
+    await interaction.reply({ content: '이 서버에는 직업패널 설정이 안 되어 있어. 관리자에게 문의해줘.', ephemeral: true });
+    return;
+  }
+
+  const member = interaction.member;
+  const allJobRoleIds = Object.values(jobRoles);
+  const rolesToRemove = allJobRoleIds.filter(roleId => member.roles.cache.has(roleId));
+
+  if (rolesToRemove.length) {
+    await member.roles.remove(rolesToRemove).catch(() => {});
+  }
+
+  await interaction.reply({ content: '✅ 직업 역할이 초기화됐어.', ephemeral: true });
+}
+
 const commands = [
   new SlashCommandBuilder()
     .setName('모집생성')
@@ -491,7 +586,11 @@ const commands = [
 
   new SlashCommandBuilder()
     .setName('문의및상담패널')
-    .setDescription('이 채널에 문의/상담 티켓 생성 버튼 패널을 올립니다 (관리자 전용)')
+    .setDescription('이 채널에 문의/상담 티켓 생성 버튼 패널을 올립니다 (관리자 전용)'),
+
+  new SlashCommandBuilder()
+    .setName('직업패널')
+    .setDescription('이 채널에 직업 선택 버튼 패널을 올립니다 (관리자 전용)')
 ].map(c => c.toJSON());
 
 client.once('ready', async () => {
@@ -549,6 +648,26 @@ client.on('messageCreate', async message => {
 client.on('interactionCreate', async interaction => {
   try {
     if (interaction.isChatInputCommand()) {
+      if (interaction.commandName === '직업패널') {
+        if (!interaction.member.permissions.has('Administrator')) {
+          await interaction.reply({ content: '관리자만 사용할 수 있어.', ephemeral: true });
+          return;
+        }
+
+        if (!JOB_ROLES[interaction.guildId]) {
+          await interaction.reply({ content: '이 서버에는 직업패널 설정이 안 되어 있어.', ephemeral: true });
+          return;
+        }
+
+        await interaction.channel.send({
+          embeds: [makeJobPanelEmbed()],
+          components: makeJobPanelButtons()
+        });
+
+        await interaction.reply({ content: '✅ 직업패널을 올렸어.', ephemeral: true });
+        return;
+      }
+
       if (interaction.commandName === '가입문의패널' || interaction.commandName === '문의및상담패널') {
         if (!interaction.member.permissions.has('Administrator')) {
           await interaction.reply({ content: '관리자만 사용할 수 있어.', ephemeral: true });
@@ -879,6 +998,17 @@ const msg = await interaction.channel.send({ embeds: [embed] });
     }
 
     if (interaction.isButton()) {
+      if (interaction.customId.startsWith('job:')) {
+        const job = interaction.customId.split(':')[1];
+        await handleJobSelect(interaction, job);
+        return;
+      }
+
+      if (interaction.customId === 'job_reset') {
+        await handleJobReset(interaction);
+        return;
+      }
+
       if (interaction.customId.startsWith('create_ticket:')) {
         const type = interaction.customId.split(':')[1];
         await handleCreateTicket(interaction, type);
