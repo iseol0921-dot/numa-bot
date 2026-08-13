@@ -63,7 +63,8 @@ const JOB_ROLES = {
   }
 };
 
-const JOB_ORDER = ['전사', '궁수', '도적', '법사', '해적', '용병'];
+const JOB_ORDER = ['전사', '궁수', '도적', '법사', '해적'];
+const MERCENARY_JOB = '용병';
 
 const client = new Client({
   intents: [
@@ -466,7 +467,7 @@ function makeJobPanelButtons() {
     )
   );
   const row2 = new ActionRowBuilder().addComponents(
-    JOB_ORDER.slice(3, 6).map(job =>
+    JOB_ORDER.slice(3, 5).map(job =>
       new ButtonBuilder().setCustomId(`job:${job}`).setLabel(job).setStyle(ButtonStyle.Primary)
     )
   );
@@ -475,6 +476,22 @@ function makeJobPanelButtons() {
   );
 
   return [row1, row2, row3];
+}
+
+function makeMercenaryPanelEmbed() {
+  return new EmbedBuilder()
+    .setTitle('🛡️ 용병 패널')
+    .setDescription('아래 버튼을 눌러 용병 역할을 설정하거나 해제해줘.')
+    .setColor(0x7c5cff);
+}
+
+function makeMercenaryPanelButtons() {
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`job:${MERCENARY_JOB}`).setLabel(MERCENARY_JOB).setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('mercenary_reset').setLabel('리셋').setStyle(ButtonStyle.Danger)
+  );
+
+  return [row];
 }
 
 async function handleJobSelect(interaction, job) {
@@ -527,6 +544,29 @@ async function handleJobReset(interaction) {
   }
 
   await interaction.reply({ content: '✅ 직업 역할이 초기화됐어.', ephemeral: true });
+}
+
+async function handleMercenaryReset(interaction) {
+  const guildId = interaction.guildId;
+  const jobRoles = JOB_ROLES[guildId];
+
+  if (!jobRoles) {
+    await interaction.reply({ content: '이 서버에는 용병패널 설정이 안 되어 있어. 관리자에게 문의해줘.', ephemeral: true });
+    return;
+  }
+
+  const mercenaryRoleId = jobRoles[MERCENARY_JOB];
+  if (!mercenaryRoleId) {
+    await interaction.reply({ content: '이 서버에는 용병 역할이 설정 안 되어 있어.', ephemeral: true });
+    return;
+  }
+
+  const member = interaction.member;
+  if (member.roles.cache.has(mercenaryRoleId)) {
+    await member.roles.remove(mercenaryRoleId).catch(() => {});
+  }
+
+  await interaction.reply({ content: '✅ 용병 역할이 초기화됐어.', ephemeral: true });
 }
 
 const commands = [
@@ -590,7 +630,11 @@ const commands = [
 
   new SlashCommandBuilder()
     .setName('직업패널')
-    .setDescription('이 채널에 직업 선택 버튼 패널을 올립니다 (관리자 전용)')
+    .setDescription('이 채널에 직업 선택 버튼 패널을 올립니다 (관리자 전용)'),
+
+  new SlashCommandBuilder()
+    .setName('용병패널')
+    .setDescription('이 채널에 용병 선택 버튼 패널을 올립니다 (관리자 전용)')
 ].map(c => c.toJSON());
 
 client.once('ready', async () => {
@@ -665,6 +709,26 @@ client.on('interactionCreate', async interaction => {
         });
 
         await interaction.reply({ content: '✅ 직업패널을 올렸어.', ephemeral: true });
+        return;
+      }
+
+      if (interaction.commandName === '용병패널') {
+        if (!interaction.member.permissions.has('Administrator')) {
+          await interaction.reply({ content: '관리자만 사용할 수 있어.', ephemeral: true });
+          return;
+        }
+
+        if (!JOB_ROLES[interaction.guildId]?.[MERCENARY_JOB]) {
+          await interaction.reply({ content: '이 서버에는 용병패널 설정이 안 되어 있어.', ephemeral: true });
+          return;
+        }
+
+        await interaction.channel.send({
+          embeds: [makeMercenaryPanelEmbed()],
+          components: makeMercenaryPanelButtons()
+        });
+
+        await interaction.reply({ content: '✅ 용병패널을 올렸어.', ephemeral: true });
         return;
       }
 
@@ -1006,6 +1070,11 @@ const msg = await interaction.channel.send({ embeds: [embed] });
 
       if (interaction.customId === 'job_reset') {
         await handleJobReset(interaction);
+        return;
+      }
+
+      if (interaction.customId === 'mercenary_reset') {
+        await handleMercenaryReset(interaction);
         return;
       }
 
