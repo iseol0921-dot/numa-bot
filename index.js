@@ -2,6 +2,7 @@ import {
   Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder,
   ActionRowBuilder, ButtonBuilder, ButtonStyle,
   ModalBuilder, TextInputBuilder, TextInputStyle, EmbedBuilder,
+  StringSelectMenuBuilder,
   ChannelType, PermissionFlagsBits
 } from 'discord.js';
 import fs from 'fs';
@@ -93,6 +94,17 @@ async function setMercenaryNickname(member, isMercenary) {
   }
 }
 
+// ===== 수요조사 패널 설정 (핑크빈 / 카텔) =====
+const SURVEY_BOSSES = [
+  { key: '핑크빈', label: '🩷 핑크빈 참여', emoji: '🩷' },
+  { key: '카텔', label: '🐲 카텔 참여', emoji: '🐲' }
+];
+const SURVEY_DAY_OPTIONS = ['월', '화', '수', '목', '금', '토', '일'];
+
+// 모달 제출 ~ 시간대 선택 완료 사이의 중간 입력값을 임시로 들고 있는 메모리 저장소
+// key: `${panelId}:${userId}:${boss}`
+const surveyPending = new Map();
+
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -102,7 +114,7 @@ const client = new Client({
 });
 
 function loadData() {
-  if (!fs.existsSync(DATA_FILE)) return { raids: {}, notices: {}, contribution: {}, resetState: {}, tickets: {} };
+  if (!fs.existsSync(DATA_FILE)) return { raids: {}, notices: {}, contribution: {}, resetState: {}, tickets: {}, surveyPanels: {} };
   try {
     const data = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
     if (!data.raids) data.raids = {};
@@ -110,9 +122,10 @@ function loadData() {
     if (!data.contribution) data.contribution = {};
     if (!data.resetState) data.resetState = {};
     if (!data.tickets) data.tickets = {};
+    if (!data.surveyPanels) data.surveyPanels = {};
     return data;
   } catch {
-    return { raids: {}, notices: {}, contribution: {}, resetState: {}, tickets: {} };
+    return { raids: {}, notices: {}, contribution: {}, resetState: {}, tickets: {}, surveyPanels: {} };
   }
 }
 
@@ -610,6 +623,221 @@ async function handleMercenaryReset(interaction) {
   await interaction.reply({ content: '✅ 용병 역할이 초기화됐어.', ephemeral: true });
 }
 
+// ===== 수요조사 패널 로직 (핑크빈 / 카텔) =====
+
+function makeSurveyPanelId() {
+  return `survey_${Date.now()}`;
+}
+
+function surveyPendingKey(panelId, userId, boss) {
+  return `${panelId}:${userId}:${boss}`;
+}
+
+function surveyResponseKey(userId, boss) {
+  return `${userId}_${boss}`;
+}
+
+function parseSurveyTimeSlots(raw) {
+  return raw
+    .split(',')
+    .map(s => s.trim())
+    .filter(s => s.length > 0)
+    .slice(0, 25); // 디스코드 셀렉트 메뉴 옵션은 최대 25개
+}
+
+function makeSurveyPanelEmbed(panel) {
+  return new EmbedBuilder()
+    .setTitle('📋 핑크빈 / 카텔 공대 수요조사')
+    .setDescription(
+      [
+        '참여를 희망하는 보스를 선택해주세요.',
+        '두 보스 모두 참여 희망 시 각각 눌러주세요.',
+        '',
+        panel.closed ? '**이 수요조사는 마감되었습니다.**' : '버튼을 누르면 입력 창이 열립니다.'
+      ].join('\n')
+    )
+    .setColor(panel.closed ? 0x808080 : 0x00b0f4)
+    .setFooter({ text: `설문 ID: ${panel.id}` });
+}
+
+function makeSurveyPanelButtons(panel) {
+  const bossButtons = SURVEY_BOSSES.map(b =>
+    new ButtonBuilder()
+      .setCustomId(`panel_apply:${panel.id}:${b.key}`)
+      .setLabel(b.label)
+      .setStyle(ButtonStyle.Primary)
+      .setDisabled(panel.closed)
+  );
+
+  const editButton = new ButtonBuilder()
+    .setCustomId(`panel_edit:${panel.id}`)
+    .setLabel('✏️ 내 응답 수정')
+    .setStyle(ButtonStyle.Secondary)
+    .setDisabled(panel.closed);
+
+  return new ActionRowBuilder().addComponents(...bossButtons, editButton);
+}
+
+async function handleSurveyApplyButton(interaction, panelId, boss) {
+  const data = loadData();
+  const panel = data.surveyPanels[panelId];
+
+  if (!panel || panel.closed) {
+    await interaction.reply({
+      content: panel ? '이미 마감된 설문입니다.' : '설문 정보를 찾을 수 없습니다.',
+      ephemeral: true
+    });
+    return;
+  }
+
+  const modal = new ModalBuilder()
+    .setCustomId(`panel_modal:${panelId}:${boss}`)
+    .setTitle(`${boss} 참여 신청`);
+
+  // 닉네임은 서버 표시 닉네임을 자동으로 사용하므로 입력받지 않음
+  const noteInput = new TextInputBuilder()
+    .setCustomId('note')
+    .setLabel('비고 (선택)')
+    .setStyle(TextInputStyle.Paragraph)
+    .setRequired(false)
+    .setMaxLength(200);
+
+  modal.addComponents(new ActionRowBuilder().addComponents(noteInput));
+
+  // showModal은 인터랙션에 대한 최초 응답이어야 함 (defer 불가)
+  await interaction.showModal(modal);
+}
+
+async function handleSurveyEditButton(interaction, panelId) {
+  const data = loadData();
+  const panel = data.surveyPanels[panelId];
+  if (!panel) {
+    await interaction.reply({ content: '설문 정보를 찾을 수 없습니다.', ephemeral: true });
+    return;
+  }
+
+  const userId = interaction.user.id;
+  const statusLines = SURVEY_BOSSES.map(b => {
+    const existing = panel.responses[surveyResponseKey(userId, b.key)];
+    return existing
+      ? `${b.emoji} ${b.key}: 등록됨 (요일: ${existing.days.join(',')} / 시간: ${existing.times.join(',')})`
+      : `${b.emoji} ${b.key}: 등록 안됨`;
+  });
+
+  const row = new ActionRowBuilder().addComponents(
+    SURVEY_BOSSES.map(b =>
+      new ButtonBuilder()
+        .setCustomId(`panel_apply:${panelId}:${b.key}`)
+        .setLabel(`${b.label} (다시 입력)`)
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(panel.closed)
+    )
+  );
+
+  await interaction.reply({
+    content: `**현재 응답 상태**\n${statusLines.join('\n')}\n\n다시 입력하려면 아래 버튼을 눌러주세요.`,
+    components: [row],
+    ephemeral: true
+  });
+}
+
+async function handleSurveyModalSubmit(interaction, panelId, boss) {
+  const note = interaction.fields.getTextInputValue('note') || '';
+  const nickname = interaction.member?.displayName ?? interaction.user.username;
+
+  const userId = interaction.user.id;
+  surveyPending.set(surveyPendingKey(panelId, userId, boss), { nickname, note });
+
+  const dayMenu = new StringSelectMenuBuilder()
+    .setCustomId(`panel_day:${panelId}:${boss}`)
+    .setPlaceholder('가능한 요일을 선택하세요 (복수 선택 가능)')
+    .setMinValues(1)
+    .setMaxValues(SURVEY_DAY_OPTIONS.length)
+    .addOptions(SURVEY_DAY_OPTIONS.map(day => ({ label: day, value: day })));
+
+  await interaction.reply({
+    content: `**${boss} 참여 신청 - 1/2단계**\n가능한 요일을 선택해주세요.`,
+    components: [new ActionRowBuilder().addComponents(dayMenu)],
+    ephemeral: true
+  });
+}
+
+async function handleSurveyDaySelect(interaction, panelId, boss) {
+  const userId = interaction.user.id;
+  const key = surveyPendingKey(panelId, userId, boss);
+  const pending = surveyPending.get(key);
+
+  if (!pending) {
+    await interaction.update({ content: '입력 시간이 만료되었습니다. 참여 버튼을 다시 눌러주세요.', components: [] });
+    return;
+  }
+
+  pending.days = interaction.values;
+  surveyPending.set(key, pending);
+
+  const data = loadData();
+  const panel = data.surveyPanels[panelId];
+  if (!panel) {
+    await interaction.update({ content: '설문 정보를 찾을 수 없습니다.', components: [] });
+    return;
+  }
+
+  const timeMenu = new StringSelectMenuBuilder()
+    .setCustomId(`panel_time:${panelId}:${boss}`)
+    .setPlaceholder('가능한 시간대를 선택하세요 (복수 선택 가능)')
+    .setMinValues(1)
+    .setMaxValues(panel.timeSlots.length)
+    .addOptions(panel.timeSlots.map(slot => ({ label: slot, value: slot })));
+
+  await interaction.update({
+    content: `**${boss} 참여 신청 - 2/2단계**\n가능한 시간대를 선택해주세요.`,
+    components: [new ActionRowBuilder().addComponents(timeMenu)]
+  });
+}
+
+async function handleSurveyTimeSelect(interaction, panelId, boss) {
+  const userId = interaction.user.id;
+  const key = surveyPendingKey(panelId, userId, boss);
+  const pending = surveyPending.get(key);
+
+  if (!pending) {
+    await interaction.update({ content: '입력 시간이 만료되었습니다. 참여 버튼을 다시 눌러주세요.', components: [] });
+    return;
+  }
+
+  const data = loadData();
+  const panel = data.surveyPanels[panelId];
+  if (!panel) {
+    await interaction.update({ content: '설문 정보를 찾을 수 없습니다.', components: [] });
+    return;
+  }
+
+  const record = {
+    userId,
+    boss,
+    nickname: pending.nickname,
+    note: pending.note,
+    days: pending.days,
+    times: interaction.values,
+    updatedAt: Date.now()
+  };
+
+  panel.responses[surveyResponseKey(userId, boss)] = record;
+  saveData(data);
+  surveyPending.delete(key);
+
+  await interaction.update({
+    content: [
+      `✅ **${boss} 참여 신청 완료**`,
+      `닉네임: ${record.nickname}`,
+      `요일: ${record.days.join(', ')}`,
+      `시간: ${record.times.join(', ')}`,
+      record.note ? `비고: ${record.note}` : null
+    ].filter(Boolean).join('\n'),
+    components: []
+  });
+}
+
 const commands = [
   new SlashCommandBuilder()
     .setName('모집생성')
@@ -675,12 +903,31 @@ const commands = [
 
   new SlashCommandBuilder()
     .setName('용병패널')
-    .setDescription('이 채널에 용병 선택 버튼 패널을 올립니다 (관리자 전용)')
+    .setDescription('이 채널에 용병 선택 버튼 패널을 올립니다 (관리자 전용)'),
+
+  new SlashCommandBuilder()
+    .setName('수요조사패널생성')
+    .setDescription('핑크빈/카텔 공대 수요조사 패널을 이 채널에 올립니다 (관리자 전용)')
+    .addStringOption(o =>
+      o.setName('시간대')
+        .setDescription('쉼표로 구분해서 입력 (예: 20:00,21:00,22:00,23:00,00:00,01:00)')
+        .setRequired(true)
+    ),
+
+  new SlashCommandBuilder()
+    .setName('수요조사마감')
+    .setDescription('수요조사 패널을 마감합니다 (관리자 전용)')
+    .addStringOption(o => o.setName('설문id').setDescription('마감할 패널의 설문 ID').setRequired(true)),
+
+  new SlashCommandBuilder()
+    .setName('수요조사현황')
+    .setDescription('수요조사 결과를 보스별/요일별로 집계해서 보여줍니다')
+    .addStringOption(o => o.setName('설문id').setDescription('확인할 패널의 설문 ID').setRequired(true))
 ].map(c => c.toJSON());
 
 client.once('ready', async () => {
   console.log(`${client.user.tag} 로그인 완료!`);
-  if (!fs.existsSync(DATA_FILE)) saveData({ raids: {}, notices: {}, contribution: {}, resetState: {}, tickets: {} });
+  if (!fs.existsSync(DATA_FILE)) saveData({ raids: {}, notices: {}, contribution: {}, resetState: {}, tickets: {}, surveyPanels: {} });
 
   const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
 
@@ -787,6 +1034,106 @@ client.on('interactionCreate', async interaction => {
         });
 
         await interaction.reply({ content: `✅ ${TICKET_TYPES[type].label} 패널을 올렸어.`, ephemeral: true });
+        return;
+      }
+
+      if (interaction.commandName === '수요조사패널생성') {
+        if (!interaction.member.permissions.has('Administrator')) {
+          await interaction.reply({ content: '관리자만 사용할 수 있어.', ephemeral: true });
+          return;
+        }
+
+        const timeSlots = parseSurveyTimeSlots(interaction.options.getString('시간대'));
+        if (timeSlots.length === 0) {
+          await interaction.reply({ content: '시간대를 하나 이상 입력해줘. (예: 20:00,21:00,22:00)', ephemeral: true });
+          return;
+        }
+
+        const panel = {
+          id: makeSurveyPanelId(),
+          guildId: interaction.guildId,
+          channelId: interaction.channelId,
+          timeSlots,
+          closed: false,
+          createdAt: Date.now(),
+          createdBy: interaction.user.id,
+          responses: {}
+        };
+
+        const message = await interaction.reply({
+          embeds: [makeSurveyPanelEmbed(panel)],
+          components: [makeSurveyPanelButtons(panel)],
+          fetchReply: true
+        });
+
+        panel.messageId = message.id;
+
+        const data = loadData();
+        data.surveyPanels[panel.id] = panel;
+        saveData(data);
+        return;
+      }
+
+      if (interaction.commandName === '수요조사마감') {
+        if (!interaction.member.permissions.has('Administrator')) {
+          await interaction.reply({ content: '관리자만 사용할 수 있어.', ephemeral: true });
+          return;
+        }
+
+        const panelId = interaction.options.getString('설문id');
+        const data = loadData();
+        const panel = data.surveyPanels[panelId];
+
+        if (!panel) {
+          await interaction.reply({ content: '해당 ID의 설문을 찾을 수 없어.', ephemeral: true });
+          return;
+        }
+        if (panel.closed) {
+          await interaction.reply({ content: '이미 마감된 설문이야.', ephemeral: true });
+          return;
+        }
+
+        panel.closed = true;
+        saveData(data);
+
+        try {
+          const channel = await client.channels.fetch(panel.channelId);
+          const message = await channel.messages.fetch(panel.messageId);
+          await message.edit({ embeds: [makeSurveyPanelEmbed(panel)], components: [makeSurveyPanelButtons(panel)] });
+        } catch (err) {
+          console.error('수요조사 패널 메시지 갱신 실패:', err);
+        }
+
+        await interaction.reply({ content: '✅ 수요조사를 마감했어.', ephemeral: true });
+        return;
+      }
+
+      if (interaction.commandName === '수요조사현황') {
+        const panelId = interaction.options.getString('설문id');
+        const data = loadData();
+        const panel = data.surveyPanels[panelId];
+
+        if (!panel) {
+          await interaction.reply({ content: '해당 ID의 설문을 찾을 수 없어.', ephemeral: true });
+          return;
+        }
+
+        const responses = Object.values(panel.responses);
+        const lines = [];
+
+        for (const b of SURVEY_BOSSES) {
+          const bossResponses = responses.filter(r => r.boss === b.key);
+          lines.push(`${b.emoji} ${b.key} 수요 ${bossResponses.length}명`);
+
+          const dayCounts = SURVEY_DAY_OPTIONS.map(day => {
+            const count = bossResponses.filter(r => r.days.includes(day)).length;
+            return `${day} ${count}명`;
+          });
+          lines.push(dayCounts.join(' / '));
+          lines.push('');
+        }
+
+        await interaction.reply(lines.join('\n').trim());
         return;
       }
 
@@ -1103,6 +1450,18 @@ const msg = await interaction.channel.send({ embeds: [embed] });
     }
 
     if (interaction.isButton()) {
+      if (interaction.customId.startsWith('panel_apply:')) {
+        const [, panelId, boss] = interaction.customId.split(':');
+        await handleSurveyApplyButton(interaction, panelId, boss);
+        return;
+      }
+
+      if (interaction.customId.startsWith('panel_edit:')) {
+        const [, panelId] = interaction.customId.split(':');
+        await handleSurveyEditButton(interaction, panelId);
+        return;
+      }
+
       if (interaction.customId.startsWith('job:')) {
         const job = interaction.customId.split(':')[1];
         await handleJobSelect(interaction, job);
@@ -1244,7 +1603,27 @@ const msg = await interaction.channel.send({ embeds: [embed] });
       }
     }
 
+    if (interaction.isStringSelectMenu()) {
+      if (interaction.customId.startsWith('panel_day:')) {
+        const [, panelId, boss] = interaction.customId.split(':');
+        await handleSurveyDaySelect(interaction, panelId, boss);
+        return;
+      }
+
+      if (interaction.customId.startsWith('panel_time:')) {
+        const [, panelId, boss] = interaction.customId.split(':');
+        await handleSurveyTimeSelect(interaction, panelId, boss);
+        return;
+      }
+    }
+
     if (interaction.isModalSubmit()) {
+      if (interaction.customId.startsWith('panel_modal:')) {
+        const [, panelId, boss] = interaction.customId.split(':');
+        await handleSurveyModalSubmit(interaction, panelId, boss);
+        return;
+      }
+
       const [action, raidId] = interaction.customId.split(':');
 
       if (action === 'party_modal') {
