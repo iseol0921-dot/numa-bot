@@ -101,7 +101,7 @@ const SURVEY_BOSSES = [
 ];
 const SURVEY_DAY_OPTIONS = ['월', '화', '수', '목', '금', '토', '일'];
 
-// 모달 제출 ~ 시간대 선택 완료 사이의 중간 입력값을 임시로 들고 있는 메모리 저장소
+// 참여 버튼 클릭 ~ 시간대 선택 완료 사이의 중간 입력값을 임시로 들고 있는 메모리 저장소
 // key: `${panelId}:${userId}:${boss}`
 const surveyPending = new Map();
 
@@ -690,22 +690,23 @@ async function handleSurveyApplyButton(interaction, panelId, boss) {
     return;
   }
 
-  const modal = new ModalBuilder()
-    .setCustomId(`panel_modal:${panelId}:${boss}`)
-    .setTitle(`${boss} 참여 신청`);
+  // 닉네임은 서버 표시 닉네임을 자동으로 사용. 별도 입력창(모달) 없이 바로 요일 선택으로 진행.
+  const nickname = interaction.member?.displayName ?? interaction.user.username;
+  const userId = interaction.user.id;
+  surveyPending.set(surveyPendingKey(panelId, userId, boss), { nickname });
 
-  // 닉네임은 서버 표시 닉네임을 자동으로 사용하므로 입력받지 않음
-  const noteInput = new TextInputBuilder()
-    .setCustomId('note')
-    .setLabel('비고 (선택)')
-    .setStyle(TextInputStyle.Paragraph)
-    .setRequired(false)
-    .setMaxLength(200);
+  const dayMenu = new StringSelectMenuBuilder()
+    .setCustomId(`panel_day:${panelId}:${boss}`)
+    .setPlaceholder('가능한 요일을 선택하세요 (복수 선택 가능)')
+    .setMinValues(1)
+    .setMaxValues(SURVEY_DAY_OPTIONS.length)
+    .addOptions(SURVEY_DAY_OPTIONS.map(day => ({ label: day, value: day })));
 
-  modal.addComponents(new ActionRowBuilder().addComponents(noteInput));
-
-  // showModal은 인터랙션에 대한 최초 응답이어야 함 (defer 불가)
-  await interaction.showModal(modal);
+  await interaction.reply({
+    content: `**${boss} 참여 신청 - 1/2단계**\n가능한 요일을 선택해주세요.`,
+    components: [new ActionRowBuilder().addComponents(dayMenu)],
+    ephemeral: true
+  });
 }
 
 async function handleSurveyEditButton(interaction, panelId) {
@@ -737,27 +738,6 @@ async function handleSurveyEditButton(interaction, panelId) {
   await interaction.reply({
     content: `**현재 응답 상태**\n${statusLines.join('\n')}\n\n다시 입력하려면 아래 버튼을 눌러주세요.`,
     components: [row],
-    ephemeral: true
-  });
-}
-
-async function handleSurveyModalSubmit(interaction, panelId, boss) {
-  const note = interaction.fields.getTextInputValue('note') || '';
-  const nickname = interaction.member?.displayName ?? interaction.user.username;
-
-  const userId = interaction.user.id;
-  surveyPending.set(surveyPendingKey(panelId, userId, boss), { nickname, note });
-
-  const dayMenu = new StringSelectMenuBuilder()
-    .setCustomId(`panel_day:${panelId}:${boss}`)
-    .setPlaceholder('가능한 요일을 선택하세요 (복수 선택 가능)')
-    .setMinValues(1)
-    .setMaxValues(SURVEY_DAY_OPTIONS.length)
-    .addOptions(SURVEY_DAY_OPTIONS.map(day => ({ label: day, value: day })));
-
-  await interaction.reply({
-    content: `**${boss} 참여 신청 - 1/2단계**\n가능한 요일을 선택해주세요.`,
-    components: [new ActionRowBuilder().addComponents(dayMenu)],
     ephemeral: true
   });
 }
@@ -816,7 +796,6 @@ async function handleSurveyTimeSelect(interaction, panelId, boss) {
     userId,
     boss,
     nickname: pending.nickname,
-    note: pending.note,
     days: pending.days,
     times: interaction.values,
     updatedAt: Date.now()
@@ -831,9 +810,8 @@ async function handleSurveyTimeSelect(interaction, panelId, boss) {
       `✅ **${boss} 참여 신청 완료**`,
       `닉네임: ${record.nickname}`,
       `요일: ${record.days.join(', ')}`,
-      `시간: ${record.times.join(', ')}`,
-      record.note ? `비고: ${record.note}` : null
-    ].filter(Boolean).join('\n'),
+      `시간: ${record.times.join(', ')}`
+    ].join('\n'),
     components: []
   });
 }
@@ -1618,12 +1596,6 @@ const msg = await interaction.channel.send({ embeds: [embed] });
     }
 
     if (interaction.isModalSubmit()) {
-      if (interaction.customId.startsWith('panel_modal:')) {
-        const [, panelId, boss] = interaction.customId.split(':');
-        await handleSurveyModalSubmit(interaction, panelId, boss);
-        return;
-      }
-
       const [action, raidId] = interaction.customId.split(':');
 
       if (action === 'party_modal') {
