@@ -99,11 +99,6 @@ const SURVEY_BOSSES = [
   { key: '핑크빈', label: '🩷 핑크빈 참여', emoji: '🩷' },
   { key: '카텔', label: '🐲 카텔 참여', emoji: '🐲' }
 ];
-const SURVEY_DAY_OPTIONS = ['월', '화', '수', '목', '금', '토', '일'];
-
-// 참여 버튼 클릭 ~ 시간대 선택 완료 사이의 중간 입력값을 임시로 들고 있는 메모리 저장소
-// key: `${panelId}:${userId}:${boss}`
-const surveyPending = new Map();
 
 const client = new Client({
   intents: [
@@ -629,10 +624,6 @@ function makeSurveyPanelId() {
   return `survey_${Date.now()}`;
 }
 
-function surveyPendingKey(panelId, userId, boss) {
-  return `${panelId}:${userId}:${boss}`;
-}
-
 function surveyResponseKey(userId, boss) {
   return `${userId}_${boss}`;
 }
@@ -690,21 +681,16 @@ async function handleSurveyApplyButton(interaction, panelId, boss) {
     return;
   }
 
-  // 닉네임은 서버 표시 닉네임을 자동으로 사용. 별도 입력창(모달) 없이 바로 요일 선택으로 진행.
-  const nickname = interaction.member?.displayName ?? interaction.user.username;
-  const userId = interaction.user.id;
-  surveyPending.set(surveyPendingKey(panelId, userId, boss), { nickname });
-
-  const dayMenu = new StringSelectMenuBuilder()
-    .setCustomId(`panel_day:${panelId}:${boss}`)
-    .setPlaceholder('가능한 요일을 선택하세요 (복수 선택 가능)')
+  const timeMenu = new StringSelectMenuBuilder()
+    .setCustomId(`panel_time:${panelId}:${boss}`)
+    .setPlaceholder('가능한 시간대를 선택하세요 (복수 선택 가능)')
     .setMinValues(1)
-    .setMaxValues(SURVEY_DAY_OPTIONS.length)
-    .addOptions(SURVEY_DAY_OPTIONS.map(day => ({ label: day, value: day })));
+    .setMaxValues(panel.timeSlots.length)
+    .addOptions(panel.timeSlots.map(slot => ({ label: slot, value: slot })));
 
   await interaction.reply({
-    content: `**${boss} 참여 신청 - 1/2단계**\n가능한 요일을 선택해주세요.`,
-    components: [new ActionRowBuilder().addComponents(dayMenu)],
+    content: `**${boss} 참여 신청**\n가능한 시간대를 선택해주세요.`,
+    components: [new ActionRowBuilder().addComponents(timeMenu)],
     ephemeral: true
   });
 }
@@ -721,7 +707,7 @@ async function handleSurveyEditButton(interaction, panelId) {
   const statusLines = SURVEY_BOSSES.map(b => {
     const existing = panel.responses[surveyResponseKey(userId, b.key)];
     return existing
-      ? `${b.emoji} ${b.key}: 등록됨 (요일: ${existing.days.join(',')} / 시간: ${existing.times.join(',')})`
+      ? `${b.emoji} ${b.key}: 등록됨 (시간: ${existing.times.join(',')})`
       : `${b.emoji} ${b.key}: 등록 안됨`;
   });
 
@@ -742,74 +728,35 @@ async function handleSurveyEditButton(interaction, panelId) {
   });
 }
 
-async function handleSurveyDaySelect(interaction, panelId, boss) {
-  const userId = interaction.user.id;
-  const key = surveyPendingKey(panelId, userId, boss);
-  const pending = surveyPending.get(key);
-
-  if (!pending) {
-    await interaction.update({ content: '입력 시간이 만료되었습니다. 참여 버튼을 다시 눌러주세요.', components: [] });
-    return;
-  }
-
-  pending.days = interaction.values;
-  surveyPending.set(key, pending);
-
-  const data = loadData();
-  const panel = data.surveyPanels[panelId];
-  if (!panel) {
-    await interaction.update({ content: '설문 정보를 찾을 수 없습니다.', components: [] });
-    return;
-  }
-
-  const timeMenu = new StringSelectMenuBuilder()
-    .setCustomId(`panel_time:${panelId}:${boss}`)
-    .setPlaceholder('가능한 시간대를 선택하세요 (복수 선택 가능)')
-    .setMinValues(1)
-    .setMaxValues(panel.timeSlots.length)
-    .addOptions(panel.timeSlots.map(slot => ({ label: slot, value: slot })));
-
-  await interaction.update({
-    content: `**${boss} 참여 신청 - 2/2단계**\n가능한 시간대를 선택해주세요.`,
-    components: [new ActionRowBuilder().addComponents(timeMenu)]
-  });
-}
-
 async function handleSurveyTimeSelect(interaction, panelId, boss) {
-  const userId = interaction.user.id;
-  const key = surveyPendingKey(panelId, userId, boss);
-  const pending = surveyPending.get(key);
-
-  if (!pending) {
-    await interaction.update({ content: '입력 시간이 만료되었습니다. 참여 버튼을 다시 눌러주세요.', components: [] });
-    return;
-  }
-
   const data = loadData();
   const panel = data.surveyPanels[panelId];
-  if (!panel) {
-    await interaction.update({ content: '설문 정보를 찾을 수 없습니다.', components: [] });
+  if (!panel || panel.closed) {
+    await interaction.update({
+      content: panel ? '이미 마감된 설문입니다.' : '설문 정보를 찾을 수 없습니다.',
+      components: []
+    });
     return;
   }
+
+  const userId = interaction.user.id;
+  const nickname = interaction.member?.displayName ?? interaction.user.username;
 
   const record = {
     userId,
     boss,
-    nickname: pending.nickname,
-    days: pending.days,
+    nickname,
     times: interaction.values,
     updatedAt: Date.now()
   };
 
   panel.responses[surveyResponseKey(userId, boss)] = record;
   saveData(data);
-  surveyPending.delete(key);
 
   await interaction.update({
     content: [
       `✅ **${boss} 참여 신청 완료**`,
       `닉네임: ${record.nickname}`,
-      `요일: ${record.days.join(', ')}`,
       `시간: ${record.times.join(', ')}`
     ].join('\n'),
     components: []
@@ -1103,11 +1050,11 @@ client.on('interactionCreate', async interaction => {
           const bossResponses = responses.filter(r => r.boss === b.key);
           lines.push(`${b.emoji} ${b.key} 수요 ${bossResponses.length}명`);
 
-          const dayCounts = SURVEY_DAY_OPTIONS.map(day => {
-            const count = bossResponses.filter(r => r.days.includes(day)).length;
-            return `${day} ${count}명`;
+          const timeCounts = panel.timeSlots.map(slot => {
+            const count = bossResponses.filter(r => r.times.includes(slot)).length;
+            return `${slot} ${count}명`;
           });
-          lines.push(dayCounts.join(' / '));
+          lines.push(timeCounts.join(' / '));
           lines.push('');
         }
 
@@ -1582,12 +1529,6 @@ const msg = await interaction.channel.send({ embeds: [embed] });
     }
 
     if (interaction.isStringSelectMenu()) {
-      if (interaction.customId.startsWith('panel_day:')) {
-        const [, panelId, boss] = interaction.customId.split(':');
-        await handleSurveyDaySelect(interaction, panelId, boss);
-        return;
-      }
-
       if (interaction.customId.startsWith('panel_time:')) {
         const [, panelId, boss] = interaction.customId.split(':');
         await handleSurveyTimeSelect(interaction, panelId, boss);
