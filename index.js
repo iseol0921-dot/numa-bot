@@ -159,6 +159,21 @@ function parseSpecNumber(raw) {
   return Number.isFinite(num) ? num : null;
 }
 
+function makeSpecPanelEmbed() {
+  return new EmbedBuilder()
+    .setTitle('🗡️ 보스 스펙 등록')
+    .setDescription(
+      [
+        '본인의 방무 / 보공 / 스공 / 레벨을 등록해주세요.',
+        `방무·보공은 0~${SPEC_MAX_BOSS_DMG}, 레벨은 1~${SPEC_MAX_LEVEL} 사이로 입력해주세요.`,
+        '스공은 원본 숫자 그대로 입력하면 돼요 (예: 29000).',
+        '',
+        '아래 버튼을 눌러 등록 / 수정 / 삭제할 수 있어요.'
+      ].join('\n')
+    )
+    .setColor(0x00b0f4);
+}
+
 function makeSpecActionRow() {
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('spec_action:register').setLabel('등록').setStyle(ButtonStyle.Primary),
@@ -1058,6 +1073,10 @@ const commands = [
     .setDescription('본인의 방무/보공/스공/레벨 스펙을 등록·수정·삭제합니다'),
 
   new SlashCommandBuilder()
+    .setName('스펙등록패널')
+    .setDescription('이 채널에 스펙 등록/수정/삭제 버튼 패널을 올립니다 (관리자 전용)'),
+
+  new SlashCommandBuilder()
     .setName('보스스펙랭킹')
     .setDescription('등록된 스펙을 방무→보공→스공→레벨 순으로 랭킹 표시합니다 (관리자 전용)'),
 
@@ -1227,6 +1246,26 @@ client.on('interactionCreate', async interaction => {
           components: [makeSpecActionRow()],
           ephemeral: true
         });
+        return;
+      }
+
+      if (interaction.commandName === '스펙등록패널') {
+        if (!interaction.member.permissions.has('Administrator')) {
+          await interaction.reply({ content: '관리자만 사용할 수 있어.', ephemeral: true });
+          return;
+        }
+
+        if (!SPEC_CONFIG[interaction.guildId]) {
+          await interaction.reply({ content: '이 서버에는 스펙등록 설정이 안 되어 있어.', ephemeral: true });
+          return;
+        }
+
+        await interaction.channel.send({
+          embeds: [makeSpecPanelEmbed()],
+          components: [makeSpecActionRow()]
+        });
+
+        await interaction.reply({ content: '✅ 스펙등록 패널을 올렸어.', ephemeral: true });
         return;
       }
 
