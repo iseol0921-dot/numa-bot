@@ -147,7 +147,7 @@ function makeSpecEmbed(entry) {
     .addFields(
       { name: '방무', value: `${entry.ignoreDef}%`, inline: true },
       { name: '보공', value: `${entry.bossDmg}%`, inline: true },
-      { name: '스공', value: `${formatStatAttack(entry.statAttack)}`, inline: true },
+      { name: '스공(노뿌)', value: `${formatStatAttack(entry.statAttack)}`, inline: true },
       { name: '레벨', value: `${entry.level}`, inline: true }
     )
     .setColor(0x00b0f4)
@@ -166,7 +166,7 @@ function makeSpecPanelEmbed() {
       [
         '본인의 방무 / 보공 / 스공 / 레벨을 등록해주세요.',
         `방무·보공은 0~${SPEC_MAX_BOSS_DMG}, 레벨은 1~${SPEC_MAX_LEVEL} 사이로 입력해주세요.`,
-        '스공은 원본 숫자 그대로 입력하면 돼요 (예: 29000).',
+        '스공은 노뿌 기준 숫자 그대로 입력하면 돼요 (예: 29000).',
         '',
         '아래 버튼을 눌러 등록 / 수정 / 삭제할 수 있어요.'
       ].join('\n')
