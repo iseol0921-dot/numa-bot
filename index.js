@@ -2,6 +2,7 @@ import {
   Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder,
   ActionRowBuilder, ButtonBuilder, ButtonStyle,
   ModalBuilder, TextInputBuilder, TextInputStyle, EmbedBuilder,
+  StringSelectMenuBuilder,
   ChannelType, PermissionFlagsBits
 } from 'discord.js';
 import fs from 'fs';
@@ -88,6 +89,33 @@ async function setMercenaryNickname(member, isMercenary) {
   } catch (err) {
     console.error('[용병 닉네임 변경 실패]', member.user.tag, err.message);
   }
+}
+
+// ===== 수요조사 패널 설정 (핑크빈 / 카텔) =====
+const SURVEY_BOSSES = [
+  { key: '핑크빈', label: '🩷 핑크빈 참여', emoji: '🩷' },
+  { key: '카텔', label: '🐲 카텔 참여', emoji: '🐲' }
+];
+
+function findActiveSurveyPanel(data, guildId) {
+  return Object.values(data.surveyPanels)
+    .filter(p => p.guildId === guildId && !p.closed)
+    .sort((a, b) => b.createdAt - a.createdAt)[0] || null;
+}
+
+async function replyWithSurveyTimeSelect(interaction, panel, boss) {
+  const timeMenu = new StringSelectMenuBuilder()
+    .setCustomId(`panel_time:${panel.id}:${boss}`)
+    .setPlaceholder('가능한 시간대를 선택하세요 (복수 선택 가능)')
+    .setMinValues(1)
+    .setMaxValues(panel.timeSlots.length)
+    .addOptions(panel.timeSlots.map(slot => ({ label: slot, value: slot })));
+
+  await interaction.reply({
+    content: `**${boss} 참여 신청**\n가능한 시간대를 선택해주세요.`,
+    components: [new ActionRowBuilder().addComponents(timeMenu)],
+    ephemeral: true
+  });
 }
 
 // ===== 보스 스펙 등록 설정 (방무/보공/스공) =====
@@ -353,7 +381,7 @@ const client = new Client({
 });
 
 function loadData() {
-  if (!fs.existsSync(DATA_FILE)) return { raids: {}, notices: {}, contribution: {}, resetState: {}, tickets: {}, bossSpecs: {} };
+  if (!fs.existsSync(DATA_FILE)) return { raids: {}, notices: {}, contribution: {}, resetState: {}, tickets: {}, surveyPanels: {}, bossSpecs: {} };
   try {
     const data = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
     if (!data.raids) data.raids = {};
@@ -361,10 +389,11 @@ function loadData() {
     if (!data.contribution) data.contribution = {};
     if (!data.resetState) data.resetState = {};
     if (!data.tickets) data.tickets = {};
+    if (!data.surveyPanels) data.surveyPanels = {};
     if (!data.bossSpecs) data.bossSpecs = {};
     return data;
   } catch {
-    return { raids: {}, notices: {}, contribution: {}, resetState: {}, tickets: {}, bossSpecs: {} };
+    return { raids: {}, notices: {}, contribution: {}, resetState: {}, tickets: {}, surveyPanels: {}, bossSpecs: {} };
   }
 }
 
@@ -862,10 +891,160 @@ async function handleMercenaryReset(interaction) {
   await interaction.reply({ content: '✅ 용병 역할이 초기화됐어.', ephemeral: true });
 }
 
+// ===== 수요조사 패널 로직 (핑크빈 / 카텔) =====
+
+function makeSurveyPanelId() {
+  return `survey_${Date.now()}`;
+}
+
+function surveyResponseKey(userId, boss) {
+  return `${userId}_${boss}`;
+}
+
+function parseSurveyTimeSlots(raw) {
+  return raw
+    .split(',')
+    .map(s => s.trim())
+    .filter(s => s.length > 0)
+    .slice(0, 25); // 디스코드 셀렉트 메뉴 옵션은 최대 25개
+}
+
+function makeSurveyPanelEmbed(panel) {
+  return new EmbedBuilder()
+    .setTitle('📋 핑크빈 / 카텔 공대 수요조사')
+    .setDescription(
+      [
+        '`/핑크빈공대참여신청` 또는 `/카텔공대참여신청` 명령어로 참여를 신청해주세요.',
+        '두 보스 모두 참여 희망 시 각각 신청해주세요.',
+        '',
+        panel.closed ? '**이 수요조사는 마감되었습니다.**' : '아래 버튼으로도 신청할 수 있습니다.'
+      ].join('\n')
+    )
+    .setColor(panel.closed ? 0x808080 : 0x00b0f4)
+    .setFooter({ text: `설문 ID: ${panel.id}` });
+}
+
+function makeSurveyPanelButtons(panel) {
+  const bossButtons = SURVEY_BOSSES.map(b =>
+    new ButtonBuilder()
+      .setCustomId(`panel_apply:${panel.id}:${b.key}`)
+      .setLabel(b.label)
+      .setStyle(ButtonStyle.Primary)
+      .setDisabled(panel.closed)
+  );
+
+  const editButton = new ButtonBuilder()
+    .setCustomId(`panel_edit:${panel.id}`)
+    .setLabel('✏️ 내 응답 수정')
+    .setStyle(ButtonStyle.Secondary)
+    .setDisabled(panel.closed);
+
+  return new ActionRowBuilder().addComponents(...bossButtons, editButton);
+}
+
+async function handleSurveyApplyButton(interaction, panelId, boss) {
+  const data = loadData();
+  const panel = data.surveyPanels[panelId];
+
+  if (!panel || panel.closed) {
+    await interaction.reply({
+      content: panel ? '이미 마감된 설문입니다.' : '설문 정보를 찾을 수 없습니다.',
+      ephemeral: true
+    });
+    return;
+  }
+
+  await replyWithSurveyTimeSelect(interaction, panel, boss);
+}
+
+async function handleSurveyEditButton(interaction, panelId) {
+  const data = loadData();
+  const panel = data.surveyPanels[panelId];
+  if (!panel) {
+    await interaction.reply({ content: '설문 정보를 찾을 수 없습니다.', ephemeral: true });
+    return;
+  }
+
+  const userId = interaction.user.id;
+  const statusLines = SURVEY_BOSSES.map(b => {
+    const existing = panel.responses[surveyResponseKey(userId, b.key)];
+    return existing
+      ? `${b.emoji} ${b.key}: 등록됨 (시간: ${existing.times.join(',')})`
+      : `${b.emoji} ${b.key}: 등록 안됨`;
+  });
+
+  const row = new ActionRowBuilder().addComponents(
+    SURVEY_BOSSES.map(b =>
+      new ButtonBuilder()
+        .setCustomId(`panel_apply:${panelId}:${b.key}`)
+        .setLabel(`${b.label} (다시 입력)`)
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(panel.closed)
+    )
+  );
+
+  await interaction.reply({
+    content: `**현재 응답 상태**\n${statusLines.join('\n')}\n\n다시 입력하려면 아래 버튼을 눌러주세요.`,
+    components: [row],
+    ephemeral: true
+  });
+}
+
+async function handleSurveyTimeSelect(interaction, panelId, boss) {
+  const data = loadData();
+  const panel = data.surveyPanels[panelId];
+  if (!panel || panel.closed) {
+    await interaction.update({
+      content: panel ? '이미 마감된 설문입니다.' : '설문 정보를 찾을 수 없습니다.',
+      components: []
+    });
+    return;
+  }
+
+  const userId = interaction.user.id;
+  const nickname = interaction.member?.displayName ?? interaction.user.username;
+
+  const record = {
+    userId,
+    boss,
+    nickname,
+    times: interaction.values,
+    updatedAt: Date.now()
+  };
+
+  panel.responses[surveyResponseKey(userId, boss)] = record;
+  saveData(data);
+
+  await interaction.update({
+    content: [
+      `✅ **${boss} 참여 신청 완료**`,
+      `닉네임: ${record.nickname}`,
+      `시간: ${record.times.join(', ')}`
+    ].join('\n'),
+    components: []
+  });
+}
+
+// 핑크빈/카텔 각각을 직접 신청할 수 있는 슬래시 커맨드 (진행 중인 설문을 자동으로 찾아 시간대 선택 메뉴를 띄움)
+async function handleBossApplyCommand(interaction, boss) {
+  const data = loadData();
+  const panel = findActiveSurveyPanel(data, interaction.guildId);
+
+  if (!panel) {
+    await interaction.reply({
+      content: '현재 진행 중인 수요조사가 없어. 관리자에게 문의해줘.',
+      ephemeral: true
+    });
+    return;
+  }
+
+  await replyWithSurveyTimeSelect(interaction, panel, boss);
+}
+
 const commands = [
   new SlashCommandBuilder()
     .setName('스펙등록')
-    .setDescription('본인의 방무/보공/스공/레벨 스펙을 등록하거나 수정합니다'),
+    .setDescription('본인의 방무/보공/스공/레벨 스펙을 등록·수정·삭제합니다'),
 
   new SlashCommandBuilder()
     .setName('보스스펙랭킹')
@@ -935,12 +1114,39 @@ const commands = [
 
   new SlashCommandBuilder()
     .setName('용병패널')
-    .setDescription('이 채널에 용병 선택 버튼 패널을 올립니다 (관리자 전용)')
+    .setDescription('이 채널에 용병 선택 버튼 패널을 올립니다 (관리자 전용)'),
+
+  new SlashCommandBuilder()
+    .setName('수요조사패널생성')
+    .setDescription('핑크빈/카텔 공대 수요조사 패널을 이 채널에 올립니다 (관리자 전용)')
+    .addStringOption(o =>
+      o.setName('시간대')
+        .setDescription('쉼표로 구분해서 입력 (예: 20:00,21:00,22:00,23:00,00:00,01:00)')
+        .setRequired(true)
+    ),
+
+  new SlashCommandBuilder()
+    .setName('수요조사마감')
+    .setDescription('수요조사 패널을 마감합니다 (관리자 전용)')
+    .addStringOption(o => o.setName('설문id').setDescription('마감할 패널의 설문 ID').setRequired(true)),
+
+  new SlashCommandBuilder()
+    .setName('수요조사현황')
+    .setDescription('수요조사 결과를 보스별/요일별로 집계해서 보여줍니다')
+    .addStringOption(o => o.setName('설문id').setDescription('확인할 패널의 설문 ID').setRequired(true)),
+
+  new SlashCommandBuilder()
+    .setName('핑크빈공대참여신청')
+    .setDescription('핑크빈 공대 참여를 신청합니다 (진행 중인 수요조사의 시간대 중 선택)'),
+
+  new SlashCommandBuilder()
+    .setName('카텔공대참여신청')
+    .setDescription('카텔 공대 참여를 신청합니다 (진행 중인 수요조사의 시간대 중 선택)')
 ].map(c => c.toJSON());
 
 client.once('ready', async () => {
   console.log(`${client.user.tag} 로그인 완료!`);
-  if (!fs.existsSync(DATA_FILE)) saveData({ raids: {}, notices: {}, contribution: {}, resetState: {}, tickets: {}, bossSpecs: {} });
+  if (!fs.existsSync(DATA_FILE)) saveData({ raids: {}, notices: {}, contribution: {}, resetState: {}, tickets: {}, surveyPanels: {}, bossSpecs: {} });
 
   const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
 
@@ -993,6 +1199,12 @@ client.on('messageCreate', async message => {
 client.on('interactionCreate', async interaction => {
   try {
     if (interaction.isChatInputCommand()) {
+      if (interaction.commandName === '핑크빈공대참여신청' || interaction.commandName === '카텔공대참여신청') {
+        const boss = interaction.commandName === '핑크빈공대참여신청' ? '핑크빈' : '카텔';
+        await handleBossApplyCommand(interaction, boss);
+        return;
+      }
+
       if (interaction.commandName === '스펙등록') {
         await interaction.reply({
           content: '원하는 작업을 선택해줘.',
@@ -1066,6 +1278,106 @@ client.on('interactionCreate', async interaction => {
         });
 
         await interaction.reply({ content: `✅ ${TICKET_TYPES[type].label} 패널을 올렸어.`, ephemeral: true });
+        return;
+      }
+
+      if (interaction.commandName === '수요조사패널생성') {
+        if (!interaction.member.permissions.has('Administrator')) {
+          await interaction.reply({ content: '관리자만 사용할 수 있어.', ephemeral: true });
+          return;
+        }
+
+        const timeSlots = parseSurveyTimeSlots(interaction.options.getString('시간대'));
+        if (timeSlots.length === 0) {
+          await interaction.reply({ content: '시간대를 하나 이상 입력해줘. (예: 20:00,21:00,22:00)', ephemeral: true });
+          return;
+        }
+
+        const panel = {
+          id: makeSurveyPanelId(),
+          guildId: interaction.guildId,
+          channelId: interaction.channelId,
+          timeSlots,
+          closed: false,
+          createdAt: Date.now(),
+          createdBy: interaction.user.id,
+          responses: {}
+        };
+
+        const message = await interaction.reply({
+          embeds: [makeSurveyPanelEmbed(panel)],
+          components: [makeSurveyPanelButtons(panel)],
+          fetchReply: true
+        });
+
+        panel.messageId = message.id;
+
+        const data = loadData();
+        data.surveyPanels[panel.id] = panel;
+        saveData(data);
+        return;
+      }
+
+      if (interaction.commandName === '수요조사마감') {
+        if (!interaction.member.permissions.has('Administrator')) {
+          await interaction.reply({ content: '관리자만 사용할 수 있어.', ephemeral: true });
+          return;
+        }
+
+        const panelId = interaction.options.getString('설문id');
+        const data = loadData();
+        const panel = data.surveyPanels[panelId];
+
+        if (!panel) {
+          await interaction.reply({ content: '해당 ID의 설문을 찾을 수 없어.', ephemeral: true });
+          return;
+        }
+        if (panel.closed) {
+          await interaction.reply({ content: '이미 마감된 설문이야.', ephemeral: true });
+          return;
+        }
+
+        panel.closed = true;
+        saveData(data);
+
+        try {
+          const channel = await client.channels.fetch(panel.channelId);
+          const message = await channel.messages.fetch(panel.messageId);
+          await message.edit({ embeds: [makeSurveyPanelEmbed(panel)], components: [makeSurveyPanelButtons(panel)] });
+        } catch (err) {
+          console.error('수요조사 패널 메시지 갱신 실패:', err);
+        }
+
+        await interaction.reply({ content: '✅ 수요조사를 마감했어.', ephemeral: true });
+        return;
+      }
+
+      if (interaction.commandName === '수요조사현황') {
+        const panelId = interaction.options.getString('설문id');
+        const data = loadData();
+        const panel = data.surveyPanels[panelId];
+
+        if (!panel) {
+          await interaction.reply({ content: '해당 ID의 설문을 찾을 수 없어.', ephemeral: true });
+          return;
+        }
+
+        const responses = Object.values(panel.responses);
+        const lines = [];
+
+        for (const b of SURVEY_BOSSES) {
+          const bossResponses = responses.filter(r => r.boss === b.key);
+          lines.push(`${b.emoji} ${b.key} 수요 ${bossResponses.length}명`);
+
+          const timeCounts = panel.timeSlots.map(slot => {
+            const count = bossResponses.filter(r => r.times.includes(slot)).length;
+            return `${slot} ${count}명`;
+          });
+          lines.push(timeCounts.join(' / '));
+          lines.push('');
+        }
+
+        await interaction.reply(lines.join('\n').trim());
         return;
       }
 
@@ -1382,6 +1694,18 @@ const msg = await interaction.channel.send({ embeds: [embed] });
     }
 
     if (interaction.isButton()) {
+      if (interaction.customId.startsWith('panel_apply:')) {
+        const [, panelId, boss] = interaction.customId.split(':');
+        await handleSurveyApplyButton(interaction, panelId, boss);
+        return;
+      }
+
+      if (interaction.customId.startsWith('panel_edit:')) {
+        const [, panelId] = interaction.customId.split(':');
+        await handleSurveyEditButton(interaction, panelId);
+        return;
+      }
+
       if (interaction.customId.startsWith('spec_action:')) {
         const action = interaction.customId.split(':')[1];
         await handleSpecAction(interaction, action);
@@ -1525,6 +1849,14 @@ const msg = await interaction.channel.send({ embeds: [embed] });
         );
 
         await interaction.showModal(modal);
+        return;
+      }
+    }
+
+    if (interaction.isStringSelectMenu()) {
+      if (interaction.customId.startsWith('panel_time:')) {
+        const [, panelId, boss] = interaction.customId.split(':');
+        await handleSurveyTimeSelect(interaction, panelId, boss);
         return;
       }
     }
