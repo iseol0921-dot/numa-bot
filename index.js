@@ -93,7 +93,7 @@ async function setMercenaryNickname(member, isMercenary) {
 
 // ===== 수요조사 패널 설정 (핑크빈 / 카텔) =====
 const SURVEY_BOSSES = [
-  { key: '핑크빈', label: '🩷 핑크빈 참여', emoji: '🩷' },
+  { key: '핑크빈', label: '🐷 핑크빈 참여', emoji: '🐷' },
   { key: '카텔', label: '🐲 카텔 참여', emoji: '🐲' }
 ];
 
