@@ -124,6 +124,111 @@ function parseSpecNumber(raw) {
   return Number.isFinite(num) ? num : null;
 }
 
+function makeSpecActionRow() {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('spec_action:register').setLabel('등록').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('spec_action:edit').setLabel('수정').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('spec_action:delete').setLabel('삭제').setStyle(ButtonStyle.Danger)
+  );
+}
+
+function buildSpecModal(existing) {
+  const modal = new ModalBuilder()
+    .setCustomId('spec_modal')
+    .setTitle(existing ? '스펙 수정' : '스펙 등록');
+
+  const ignoreDefInput = new TextInputBuilder()
+    .setCustomId('ignoreDef')
+    .setLabel(`방무 (0~${SPEC_MAX_IGNORE_DEF})`)
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true);
+  const bossDmgInput = new TextInputBuilder()
+    .setCustomId('bossDmg')
+    .setLabel(`보공 (0~${SPEC_MAX_BOSS_DMG})`)
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true);
+  const statAttackInput = new TextInputBuilder()
+    .setCustomId('statAttack')
+    .setLabel('스공 (예: 29000)')
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true);
+  const levelInput = new TextInputBuilder()
+    .setCustomId('level')
+    .setLabel(`레벨 (1~${SPEC_MAX_LEVEL})`)
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true);
+
+  if (existing) {
+    ignoreDefInput.setValue(String(existing.ignoreDef));
+    bossDmgInput.setValue(String(existing.bossDmg));
+    statAttackInput.setValue(String(existing.statAttack));
+    levelInput.setValue(String(existing.level));
+  }
+
+  modal.addComponents(
+    new ActionRowBuilder().addComponents(ignoreDefInput),
+    new ActionRowBuilder().addComponents(bossDmgInput),
+    new ActionRowBuilder().addComponents(statAttackInput),
+    new ActionRowBuilder().addComponents(levelInput)
+  );
+
+  return modal;
+}
+
+async function handleSpecAction(interaction, action) {
+  const guildId = interaction.guildId;
+  const config = SPEC_CONFIG[guildId];
+
+  if (!config) {
+    await interaction.reply({ content: '이 서버에는 스펙등록 설정이 안 되어 있어. 관리자에게 문의해줘.', ephemeral: true });
+    return;
+  }
+
+  const data = loadData();
+  const existing = data.bossSpecs?.[guildId]?.[interaction.user.id];
+
+  if (action === 'register') {
+    if (existing) {
+      await interaction.reply({ content: '이미 등록된 스펙이 있어. "수정" 버튼을 이용해줘.', ephemeral: true });
+      return;
+    }
+    await interaction.showModal(buildSpecModal(null));
+    return;
+  }
+
+  if (action === 'edit') {
+    if (!existing) {
+      await interaction.reply({ content: '등록된 스펙이 없어. "등록" 버튼을 먼저 눌러줘.', ephemeral: true });
+      return;
+    }
+    await interaction.showModal(buildSpecModal(existing));
+    return;
+  }
+
+  if (action === 'delete') {
+    if (!existing) {
+      await interaction.reply({ content: '등록된 스펙이 없어.', ephemeral: true });
+      return;
+    }
+
+    try {
+      const channel = await client.channels.fetch(config.channelId);
+      if (existing.messageId) {
+        const msg = await channel.messages.fetch(existing.messageId).catch(() => null);
+        if (msg) await msg.delete().catch(() => {});
+      }
+    } catch (err) {
+      console.error('[스펙삭제] 채널 메시지 삭제 실패:', err);
+    }
+
+    delete data.bossSpecs[guildId][interaction.user.id];
+    saveData(data);
+
+    await interaction.reply({ content: '✅ 스펙 등록 정보를 삭제했어.', ephemeral: true });
+    return;
+  }
+}
+
 async function handleSpecModalSubmit(interaction) {
   const guildId = interaction.guildId;
   const config = SPEC_CONFIG[guildId];
@@ -889,26 +994,11 @@ client.on('interactionCreate', async interaction => {
   try {
     if (interaction.isChatInputCommand()) {
       if (interaction.commandName === '스펙등록') {
-        const modal = new ModalBuilder()
-          .setCustomId('spec_modal')
-          .setTitle('스펙 등록');
-
-        modal.addComponents(
-          new ActionRowBuilder().addComponents(
-            new TextInputBuilder().setCustomId('ignoreDef').setLabel(`방무 (0~${SPEC_MAX_IGNORE_DEF})`).setStyle(TextInputStyle.Short).setRequired(true)
-          ),
-          new ActionRowBuilder().addComponents(
-            new TextInputBuilder().setCustomId('bossDmg').setLabel(`보공 (0~${SPEC_MAX_BOSS_DMG})`).setStyle(TextInputStyle.Short).setRequired(true)
-          ),
-          new ActionRowBuilder().addComponents(
-            new TextInputBuilder().setCustomId('statAttack').setLabel('스공 (예: 29000)').setStyle(TextInputStyle.Short).setRequired(true)
-          ),
-          new ActionRowBuilder().addComponents(
-            new TextInputBuilder().setCustomId('level').setLabel(`레벨 (1~${SPEC_MAX_LEVEL})`).setStyle(TextInputStyle.Short).setRequired(true)
-          )
-        );
-
-        await interaction.showModal(modal);
+        await interaction.reply({
+          content: '원하는 작업을 선택해줘.',
+          components: [makeSpecActionRow()],
+          ephemeral: true
+        });
         return;
       }
 
@@ -1292,6 +1382,12 @@ const msg = await interaction.channel.send({ embeds: [embed] });
     }
 
     if (interaction.isButton()) {
+      if (interaction.customId.startsWith('spec_action:')) {
+        const action = interaction.customId.split(':')[1];
+        await handleSpecAction(interaction, action);
+        return;
+      }
+
       if (interaction.customId.startsWith('job:')) {
         const job = interaction.customId.split(':')[1];
         await handleJobSelect(interaction, job);
