@@ -104,12 +104,19 @@ function findActiveSurveyPanel(data, guildId) {
 }
 
 async function replyWithSurveyTimeSelect(interaction, panel, boss) {
+  const slots = panel.timeSlots[boss] ?? [];
+
+  if (slots.length === 0) {
+    await interaction.reply({ content: `${boss}에는 설정된 시간대가 없어. 관리자에게 문의해줘.`, ephemeral: true });
+    return;
+  }
+
   const timeMenu = new StringSelectMenuBuilder()
     .setCustomId(`panel_time:${panel.id}:${boss}`)
     .setPlaceholder('가능한 시간대를 선택하세요 (복수 선택 가능)')
     .setMinValues(1)
-    .setMaxValues(panel.timeSlots.length)
-    .addOptions(panel.timeSlots.map(slot => ({ label: slot, value: slot })));
+    .setMaxValues(slots.length)
+    .addOptions(slots.map(slot => ({ label: slot, value: slot })));
 
   await interaction.reply({
     content: `**${boss} 참여 신청**\n가능한 시간대를 선택해주세요.`,
@@ -910,12 +917,16 @@ function parseSurveyTimeSlots(raw) {
 }
 
 function makeSurveyPanelEmbed(panel) {
+  const timeLines = SURVEY_BOSSES.map(b => `${b.emoji} ${b.key}: ${(panel.timeSlots[b.key] ?? []).join(', ') || '설정 안됨'}`);
+
   return new EmbedBuilder()
     .setTitle('📋 핑크빈 / 카텔 공대 수요조사')
     .setDescription(
       [
         '`/핑크빈공대참여신청` 또는 `/카텔공대참여신청` 명령어로 참여를 신청해주세요.',
         '두 보스 모두 참여 희망 시 각각 신청해주세요.',
+        '',
+        ...timeLines,
         '',
         panel.closed ? '**이 수요조사는 마감되었습니다.**' : '아래 버튼으로도 신청할 수 있습니다.'
       ].join('\n')
@@ -1120,8 +1131,13 @@ const commands = [
     .setName('수요조사패널생성')
     .setDescription('핑크빈/카텔 공대 수요조사 패널을 이 채널에 올립니다 (관리자 전용)')
     .addStringOption(o =>
-      o.setName('시간대')
-        .setDescription('쉼표로 구분해서 입력 (예: 20:00,21:00,22:00,23:00,00:00,01:00)')
+      o.setName('핑크빈시간대')
+        .setDescription('쉼표로 구분해서 입력 (예: 20:00,21:00,22:00)')
+        .setRequired(true)
+    )
+    .addStringOption(o =>
+      o.setName('카텔시간대')
+        .setDescription('쉼표로 구분해서 입력 (예: 20:00,21:00,22:00)')
         .setRequired(true)
     ),
 
@@ -1287,9 +1303,11 @@ client.on('interactionCreate', async interaction => {
           return;
         }
 
-        const timeSlots = parseSurveyTimeSlots(interaction.options.getString('시간대'));
-        if (timeSlots.length === 0) {
-          await interaction.reply({ content: '시간대를 하나 이상 입력해줘. (예: 20:00,21:00,22:00)', ephemeral: true });
+        const pinkBeanSlots = parseSurveyTimeSlots(interaction.options.getString('핑크빈시간대'));
+        const catTelSlots = parseSurveyTimeSlots(interaction.options.getString('카텔시간대'));
+
+        if (pinkBeanSlots.length === 0 || catTelSlots.length === 0) {
+          await interaction.reply({ content: '핑크빈/카텔 시간대를 각각 하나 이상 입력해줘. (예: 20:00,21:00,22:00)', ephemeral: true });
           return;
         }
 
@@ -1297,7 +1315,7 @@ client.on('interactionCreate', async interaction => {
           id: makeSurveyPanelId(),
           guildId: interaction.guildId,
           channelId: interaction.channelId,
-          timeSlots,
+          timeSlots: { 핑크빈: pinkBeanSlots, 카텔: catTelSlots },
           closed: false,
           createdAt: Date.now(),
           createdBy: interaction.user.id,
@@ -1369,7 +1387,7 @@ client.on('interactionCreate', async interaction => {
           const bossResponses = responses.filter(r => r.boss === b.key);
           lines.push(`${b.emoji} ${b.key} 수요 ${bossResponses.length}명`);
 
-          const timeCounts = panel.timeSlots.map(slot => {
+          const timeCounts = (panel.timeSlots[b.key] ?? []).map(slot => {
             const count = bossResponses.filter(r => r.times.includes(slot)).length;
             return `${slot} ${count}명`;
           });
