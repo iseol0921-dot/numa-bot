@@ -6,12 +6,14 @@ import {
   ChannelType, PermissionFlagsBits
 } from 'discord.js';
 import fs from 'fs';
+import path from 'path';
 
 const SERVER_IDS = [
   '1530925354141749258'
 ];
 
-const DATA_FILE = './data.json';
+// Railway 볼륨을 마운트한 경로. 볼륨 마운트 경로가 다르면 이 값도 맞춰서 바꿔줘야 함.
+const DATA_FILE = process.env.DATA_FILE_PATH || '/data/data.json';
 const NOTICE_REFRESH_COUNT = 5;
 
 // ===== 아이템 거래방 자동 리셋 설정 =====
@@ -147,7 +149,7 @@ function makeSpecEmbed(entry) {
     .addFields(
       { name: '방무', value: `${entry.ignoreDef}%`, inline: true },
       { name: '보공', value: `${entry.bossDmg}%`, inline: true },
-      { name: '스공(노뿌)', value: `${formatStatAttack(entry.statAttack)}`, inline: true },
+      { name: '스공', value: `${formatStatAttack(entry.statAttack)}`, inline: true },
       { name: '레벨', value: `${entry.level}`, inline: true }
     )
     .setColor(0x00b0f4)
@@ -166,7 +168,7 @@ function makeSpecPanelEmbed() {
       [
         '본인의 방무 / 보공 / 스공 / 레벨을 등록해주세요.',
         `방무·보공은 0~${SPEC_MAX_BOSS_DMG}, 레벨은 1~${SPEC_MAX_LEVEL} 사이로 입력해주세요.`,
-        '스공은 노뿌 기준 숫자 그대로 입력하면 돼요 (예: 29000).',
+        '스공은 원본 숫자 그대로 입력하면 돼요 (예: 29000).',
         '',
         '아래 버튼을 눌러 등록 / 수정 / 삭제할 수 있어요.'
       ].join('\n')
@@ -199,7 +201,7 @@ function buildSpecModal(existing) {
     .setRequired(true);
   const statAttackInput = new TextInputBuilder()
     .setCustomId('statAttack')
-    .setLabel('스공(노뿌) (예: 29000)')
+    .setLabel('스공 (예: 29000)')
     .setStyle(TextInputStyle.Short)
     .setRequired(true);
   const levelInput = new TextInputBuilder()
@@ -420,6 +422,8 @@ function loadData() {
 }
 
 function saveData(data) {
+  const dir = path.dirname(DATA_FILE);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2), 'utf8');
 }
 
@@ -1426,15 +1430,25 @@ client.on('interactionCreate', async interaction => {
           const bossResponses = responses.filter(r => r.boss === b.key);
           lines.push(`${b.emoji} ${b.key} 수요 ${bossResponses.length}명`);
 
-          const timeCounts = (panel.timeSlots[b.key] ?? []).map(slot => {
-            const count = bossResponses.filter(r => r.times.includes(slot)).length;
-            return `${slot} ${count}명`;
+          const slotLines = (panel.timeSlots[b.key] ?? []).map(slot => {
+            const names = bossResponses.filter(r => r.times.includes(slot)).map(r => r.nickname);
+            return `${slot} ${names.length}명${names.length ? ` — ${names.join(', ')}` : ''}`;
           });
-          lines.push(timeCounts.join(' / '));
+          lines.push(...slotLines);
           lines.push('');
         }
 
-        await interaction.reply(lines.join('\n').trim());
+        const full = lines.join('\n').trim();
+
+        if (full.length > 1900) {
+          const buffer = Buffer.from(full, 'utf-8');
+          await interaction.reply({
+            content: '인원이 많아 파일로 첨부할게.',
+            files: [{ attachment: buffer, name: '수요조사현황.txt' }]
+          });
+        } else {
+          await interaction.reply(full);
+        }
         return;
       }
 
