@@ -199,7 +199,7 @@ function buildSpecModal(existing) {
     .setRequired(true);
   const statAttackInput = new TextInputBuilder()
     .setCustomId('statAttack')
-    .setLabel('스공 (예: 29000)')
+    .setLabel('스공(노뿌) (예: 29000)')
     .setStyle(TextInputStyle.Short)
     .setRequired(true);
   const levelInput = new TextInputBuilder()
