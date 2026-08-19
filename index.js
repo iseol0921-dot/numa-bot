@@ -93,10 +93,11 @@ async function setMercenaryNickname(member, isMercenary) {
   }
 }
 
-// ===== 수요조사 패널 설정 (핑크빈 / 카텔) =====
+// ===== 수요조사 패널 설정 (핑크빈 / 카텔 / 카쿰) =====
 const SURVEY_BOSSES = [
   { key: '핑크빈', label: '🐷 핑크빈 참여', emoji: '🐷' },
-  { key: '카텔', label: '🐲 카텔 참여', emoji: '🐲' }
+  { key: '카텔', label: '🐲 카텔 참여', emoji: '🐲' },
+  { key: '카쿰', label: '💀 카쿰 참여', emoji: '💀' }
 ];
 
 function findActiveSurveyPanel(data, guildId) {
@@ -939,11 +940,11 @@ function makeSurveyPanelEmbed(panel) {
   const timeLines = SURVEY_BOSSES.map(b => `${b.emoji} ${b.key}: ${(panel.timeSlots[b.key] ?? []).join(', ') || '설정 안됨'}`);
 
   return new EmbedBuilder()
-    .setTitle('📋 핑크빈 / 카텔 공대 수요조사')
+    .setTitle('📋 핑크빈 / 카텔 / 카쿰 공대 수요조사')
     .setDescription(
       [
-        '`/핑크빈공대참여신청` 또는 `/카텔공대참여신청` 명령어로 참여를 신청해주세요.',
-        '두 보스 모두 참여 희망 시 각각 신청해주세요.',
+        '`/핑크빈공대참여신청`, `/카텔공대참여신청`, `/카쿰공대참여신청` 명령어로 참여를 신청해주세요.',
+        '여러 보스 참여 희망 시 각각 신청해주세요.',
         '',
         ...timeLines,
         '',
@@ -1152,7 +1153,7 @@ const commands = [
 
   new SlashCommandBuilder()
     .setName('수요조사패널생성')
-    .setDescription('핑크빈/카텔 공대 수요조사 패널을 이 채널에 올립니다 (관리자 전용)')
+    .setDescription('핑크빈/카텔/카쿰 공대 수요조사 패널을 이 채널에 올립니다 (관리자 전용)')
     .addStringOption(o =>
       o.setName('핑크빈시간대')
         .setDescription('쉼표로 구분해서 입력 (예: 20:00,21:00,22:00)')
@@ -1160,6 +1161,11 @@ const commands = [
     )
     .addStringOption(o =>
       o.setName('카텔시간대')
+        .setDescription('쉼표로 구분해서 입력 (예: 20:00,21:00,22:00)')
+        .setRequired(true)
+    )
+    .addStringOption(o =>
+      o.setName('카쿰시간대')
         .setDescription('쉼표로 구분해서 입력 (예: 20:00,21:00,22:00)')
         .setRequired(true)
     ),
@@ -1180,7 +1186,11 @@ const commands = [
 
   new SlashCommandBuilder()
     .setName('카텔공대참여신청')
-    .setDescription('카텔 공대 참여를 신청합니다 (진행 중인 수요조사의 시간대 중 선택)')
+    .setDescription('카텔 공대 참여를 신청합니다 (진행 중인 수요조사의 시간대 중 선택)'),
+
+  new SlashCommandBuilder()
+    .setName('카쿰공대참여신청')
+    .setDescription('카쿰 공대 참여를 신청합니다 (진행 중인 수요조사의 시간대 중 선택)')
 ].map(c => c.toJSON());
 
 client.once('ready', async () => {
@@ -1238,8 +1248,12 @@ client.on('messageCreate', async message => {
 client.on('interactionCreate', async interaction => {
   try {
     if (interaction.isChatInputCommand()) {
-      if (interaction.commandName === '핑크빈공대참여신청' || interaction.commandName === '카텔공대참여신청') {
-        const boss = interaction.commandName === '핑크빈공대참여신청' ? '핑크빈' : '카텔';
+      if (
+        interaction.commandName === '핑크빈공대참여신청' ||
+        interaction.commandName === '카텔공대참여신청' ||
+        interaction.commandName === '카쿰공대참여신청'
+      ) {
+        const boss = interaction.commandName.replace('공대참여신청', '');
         await handleBossApplyCommand(interaction, boss);
         return;
       }
@@ -1348,9 +1362,10 @@ client.on('interactionCreate', async interaction => {
 
         const pinkBeanSlots = parseSurveyTimeSlots(interaction.options.getString('핑크빈시간대'));
         const catTelSlots = parseSurveyTimeSlots(interaction.options.getString('카텔시간대'));
+        const zakumSlots = parseSurveyTimeSlots(interaction.options.getString('카쿰시간대'));
 
-        if (pinkBeanSlots.length === 0 || catTelSlots.length === 0) {
-          await interaction.reply({ content: '핑크빈/카텔 시간대를 각각 하나 이상 입력해줘. (예: 20:00,21:00,22:00)', ephemeral: true });
+        if (pinkBeanSlots.length === 0 || catTelSlots.length === 0 || zakumSlots.length === 0) {
+          await interaction.reply({ content: '핑크빈/카텔/카쿰 시간대를 각각 하나 이상 입력해줘. (예: 20:00,21:00,22:00)', ephemeral: true });
           return;
         }
 
@@ -1358,7 +1373,7 @@ client.on('interactionCreate', async interaction => {
           id: makeSurveyPanelId(),
           guildId: interaction.guildId,
           channelId: interaction.channelId,
-          timeSlots: { 핑크빈: pinkBeanSlots, 카텔: catTelSlots },
+          timeSlots: { 핑크빈: pinkBeanSlots, 카텔: catTelSlots, 카쿰: zakumSlots },
           closed: false,
           createdAt: Date.now(),
           createdBy: interaction.user.id,
